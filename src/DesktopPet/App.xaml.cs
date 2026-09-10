@@ -3,6 +3,7 @@ using DesktopPet.Data;
 using DesktopPet.Pet;
 using DesktopPet.UI;
 using System.Windows;
+using System.Windows.Interop;
 using Forms = System.Windows.Forms;
 
 namespace DesktopPet;
@@ -15,6 +16,7 @@ public partial class App : System.Windows.Application
     private MainWindow? _petWindow;
     private SettingsWindow? _settingsWindow;
     private QuickAccessWindow? _quickAccessWindow;
+    private KeyboardStatisticsWindow? _keyboardStatisticsWindow;
     private double _quickAccessOffsetLeft;
     private double _quickAccessOffsetTop;
     private DesktopPetRepository? _repository;
@@ -22,10 +24,12 @@ public partial class App : System.Windows.Application
     private System.Threading.EventWaitHandle? _activateEvent;
     private bool _isPrimaryInstance;
     private bool _restoreQuickAccessAfterTrayShow;
+    private bool _restoreKeyboardStatisticsAfterTrayShow;
+    private GlobalHotkey? _visibilityHotkey;
+    private KeyboardStatisticsService? _keyboardStatisticsService;
 
     protected override void OnStartup(StartupEventArgs e)
     {
-        DpiAwareness.EnablePerMonitorV2();
         base.OnStartup(e);
         if (!AcquireSingleInstance())
         {
@@ -37,17 +41,23 @@ public partial class App : System.Windows.Application
         ApplicationShortcutService.EnsureDesktopAndStartupShortcuts();
         _repository = new DesktopPetRepository(AppPaths.DatabasePath);
         _repository.Initialize();
+        _keyboardStatisticsService = new KeyboardStatisticsService(_repository);
 
         _petWindow = new MainWindow(
             new PetStateMachine(),
             new PetImageStatePresenter(Path.Combine(AppContext.BaseDirectory, "Assets", "Pet")),
             new PetWindowPlacementStore(AppPaths.WindowPlacementPath));
         _petWindow.Closed += (_, _) => Shutdown();
-        _petWindow.LocationChanged += (_, _) => MoveQuickAccessWithPet();
-        _petWindow.MonitorDpiChanged += (_, _) => Dispatcher.BeginInvoke(MoveQuickAccessWithPet);
+        _petWindow.LocationChanged += (_, _) => MoveCompanionWindowsWithPet();
+        _petWindow.MonitorDpiChanged += (_, _) => Dispatcher.BeginInvoke(MoveCompanionWindowsWithPet);
         _petWindow.SettingsRequested += (_, _) => ShowSettings();
+        _petWindow.KeyboardStatisticsRequested += (_, _) => ShowKeyboardStatistics();
         _petWindow.FeatureFlyoutRequested += ToggleFeatureFlyout;
         _petWindow.Show();
+
+        _visibilityHotkey = new GlobalHotkey(new WindowInteropHelper(_petWindow).Handle, ToggleAppVisibility);
+        if (_petWindow.ToggleVisibilityHotkey is { } configuredHotkey && !_visibilityHotkey.TrySet(configuredHotkey))
+            MessageBox.Show("已保存的显示 / 隐藏快捷键被其他程序占用，请在设置中重新配置。", "DesktopPet");
 
         _trayIcon = TrayIconFactory.Create(_petWindow, ToggleAppVisibility, ShowSettings, Shutdown);
     }
@@ -55,6 +65,8 @@ public partial class App : System.Windows.Application
     protected override void OnExit(ExitEventArgs e)
     {
         _trayIcon?.Dispose();
+        _visibilityHotkey?.Dispose();
+        _keyboardStatisticsService?.Dispose();
         _activateEvent?.Dispose();
         if (_isPrimaryInstance) _instanceMutex?.ReleaseMutex();
         _instanceMutex?.Dispose();
@@ -92,14 +104,18 @@ public partial class App : System.Windows.Application
         if (_petWindow.IsVisible)
         {
             _restoreQuickAccessAfterTrayShow = _quickAccessWindow is { IsVisible: true };
+            _restoreKeyboardStatisticsAfterTrayShow = _keyboardStatisticsWindow is { IsVisible: true };
             _quickAccessWindow?.Hide();
+            _keyboardStatisticsWindow?.Hide();
             _petWindow.TogglePetVisibility();
             return;
         }
 
         _petWindow.TogglePetVisibility();
-        if (_restoreQuickAccessAfterTrayShow) ShowFeatureFlyout();
+        if (_restoreKeyboardStatisticsAfterTrayShow) ShowKeyboardStatistics();
+        else if (_restoreQuickAccessAfterTrayShow) ShowFeatureFlyout();
         _restoreQuickAccessAfterTrayShow = false;
+        _restoreKeyboardStatisticsAfterTrayShow = false;
     }
 
     private void ShowSettings()
@@ -111,20 +127,32 @@ public partial class App : System.Windows.Application
             return;
         }
 
-        _settingsWindow = new SettingsWindow(_petWindow, _repository!);
+        _settingsWindow = new SettingsWindow(_petWindow, _repository!, SetVisibilityHotkey);
         _settingsWindow.Closed += (_, _) => _settingsWindow = null;
         _settingsWindow.Show();
+    }
+
+    private bool SetVisibilityHotkey(HotkeyGesture? hotkey)
+    {
+        if (_visibilityHotkey is null || _petWindow is null || !_visibilityHotkey.TrySet(hotkey)) return false;
+        _petWindow.SetToggleVisibilityHotkey(hotkey);
+        return true;
     }
 
     private void ToggleFeatureFlyout(bool show)
     {
         if (show) ShowFeatureFlyout();
-        else _quickAccessWindow?.Hide();
+        else
+        {
+            _quickAccessWindow?.Hide();
+            _keyboardStatisticsWindow?.Hide();
+        }
     }
 
     private void ShowFeatureFlyout()
     {
         if (_repository is null || _petWindow is null) return;
+        _keyboardStatisticsWindow?.Hide();
         if (_quickAccessWindow is { IsVisible: true })
         {
             _quickAccessWindow.Activate();
@@ -146,10 +174,35 @@ public partial class App : System.Windows.Application
         _quickAccessWindow.Show();
     }
 
-    private void MoveQuickAccessWithPet()
+    private void ShowKeyboardStatistics()
     {
-        if (_quickAccessWindow is not { IsVisible: true } || _petWindow is null) return;
-        _quickAccessWindow.Left = _petWindow.Left + _quickAccessOffsetLeft;
-        _quickAccessWindow.Top = _petWindow.Top + _quickAccessOffsetTop;
+        if (_repository is null || _petWindow is null || _keyboardStatisticsService is null) return;
+        _quickAccessWindow?.Hide();
+        if (_keyboardStatisticsWindow is null)
+        {
+            _keyboardStatisticsWindow = new KeyboardStatisticsWindow(_repository, _keyboardStatisticsService.Flush) { Owner = _petWindow };
+            _keyboardStatisticsWindow.Closed += (_, _) => _keyboardStatisticsWindow = null;
+        }
+        _keyboardStatisticsWindow.Left = _petWindow.Left - _keyboardStatisticsWindow.Width - 12;
+        _keyboardStatisticsWindow.Top = _petWindow.Top;
+        _keyboardStatisticsWindow.RefreshStatistics();
+        _petWindow.SetCompanionWindowVisible(true);
+        if (!_keyboardStatisticsWindow.IsVisible) _keyboardStatisticsWindow.Show();
+        else _keyboardStatisticsWindow.Activate();
+    }
+
+    private void MoveCompanionWindowsWithPet()
+    {
+        if (_petWindow is null) return;
+        if (_quickAccessWindow is { IsVisible: true })
+        {
+            _quickAccessWindow.Left = _petWindow.Left + _quickAccessOffsetLeft;
+            _quickAccessWindow.Top = _petWindow.Top + _quickAccessOffsetTop;
+        }
+        if (_keyboardStatisticsWindow is { IsVisible: true })
+        {
+            _keyboardStatisticsWindow.Left = _petWindow.Left - _keyboardStatisticsWindow.Width - 12;
+            _keyboardStatisticsWindow.Top = _petWindow.Top;
+        }
     }
 }

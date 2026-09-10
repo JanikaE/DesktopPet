@@ -20,7 +20,9 @@ public partial class MainWindow : Window
     public event EventHandler? SettingsRequested;
     public event EventHandler? MonitorDpiChanged;
     public event Action<bool>? FeatureFlyoutRequested;
+    public event EventHandler? KeyboardStatisticsRequested;
     public bool IsPetTopmost => Topmost;
+    public HotkeyGesture? ToggleVisibilityHotkey { get; private set; }
 
     public MainWindow(PetStateMachine stateMachine, PetImageStatePresenter imagePresenter, PetWindowPlacementStore placementStore)
     {
@@ -91,6 +93,7 @@ public partial class MainWindow : Window
 
     private void ToggleTopmost(object sender, RoutedEventArgs e) => SetPetTopmost(((System.Windows.Controls.MenuItem)sender).IsChecked);
     private void OpenSettings(object sender, RoutedEventArgs e) => SettingsRequested?.Invoke(this, EventArgs.Empty);
+    private void OpenKeyboardStatistics(object sender, RoutedEventArgs e) => KeyboardStatisticsRequested?.Invoke(this, EventArgs.Empty);
     private void ExitApplication(object sender, RoutedEventArgs e) => Application.Current.Shutdown();
 
     public void TogglePetTopmost() => SetPetTopmost(!Topmost);
@@ -136,6 +139,7 @@ public partial class MainWindow : Window
         {
             Left = placement.Left;
             Top = placement.Top;
+            ToggleVisibilityHotkey = placement.Hotkey;
             SetPetTopmost(placement.Topmost);
         }
 
@@ -148,7 +152,20 @@ public partial class MainWindow : Window
         SavePlacement();
     }
 
-    private void SavePlacement() => _placementStore.Save(Left, Top, Topmost);
+    public void SetToggleVisibilityHotkey(HotkeyGesture? hotkey)
+    {
+        ToggleVisibilityHotkey = hotkey;
+        SavePlacement();
+    }
+
+    public void SetCompanionWindowVisible(bool visible)
+    {
+        _isFeatureFlyoutVisible = visible;
+        if (visible) _stateMachine.PlayClick();
+        else _stateMachine.FinishAnimation();
+    }
+
+    private void SavePlacement() => _placementStore.Save(Left, Top, Topmost, ToggleVisibilityHotkey);
 
     private void KeepWindowVisible()
     {
