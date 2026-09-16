@@ -3,6 +3,7 @@ using DesktopPet.Data;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using System.Windows.Input;
 using System.Windows.Media;
 
 namespace DesktopPet.UI;
@@ -15,6 +16,9 @@ public partial class KeyboardStatisticsWindow : Window
     private readonly Dictionary<int, List<Border>> _keyViews = [];
     private IReadOnlyDictionary<int, long> _counts = new Dictionary<int, long>();
     private HashSet<DateOnly> _datesWithData = [];
+    private DateTime? _rangeStart;
+    private DateTime? _rangeEnd;
+    private DateTime? _rangeAnchor;
     private bool _updatingDates;
 
     public KeyboardStatisticsWindow(DesktopPetRepository repository, Action flushPending)
@@ -23,6 +27,7 @@ public partial class KeyboardStatisticsWindow : Window
         SourceInitialized += (_, _) => WindowAppearance.EnableRoundedCorners(this);
         _repository = repository;
         _flushPending = flushPending;
+        RangeCalendar.AddHandler(PreviewMouseLeftButtonDownEvent, new MouseButtonEventHandler(CalendarPreviewMouseDown), handledEventsToo: true);
         BuildKeyboard();
         RangeBox.SelectedIndex = 0;
     }
@@ -66,47 +71,121 @@ public partial class KeyboardStatisticsWindow : Window
             _ when _datesWithData.Count > 0 => (_datesWithData.Min().ToDateTime(TimeOnly.MinValue), _datesWithData.Max().ToDateTime(TimeOnly.MinValue)),
             _ => (today, today)
         };
-        _updatingDates = true;
-        StartDatePicker.SelectedDate = start;
-        EndDatePicker.SelectedDate = end;
-        _updatingDates = false;
+        SetRange(start, end);
     }
 
-    private void SelectedDateChanged(object sender, SelectionChangedEventArgs e)
+    private void SetRange(DateTime start, DateTime end)
     {
-        if (_updatingDates || !IsInitialized) return;
+        _rangeStart = start;
+        _rangeEnd = end;
+        _rangeAnchor = null;
         _updatingDates = true;
-        RangeBox.SelectedIndex = 4;
+        RangeCalendar.SelectedDates.Clear();
+        RangeCalendar.SelectedDates.AddRange(start, end);
+        RangeCalendar.DisplayDate = end;
         _updatingDates = false;
-        if (StartDatePicker.SelectedDate is not null && EndDatePicker.SelectedDate is not null) RefreshStatistics();
+        UpdateRangeButtonText();
+        RefreshDayHighlights();
     }
+
+    private void UpdateRangeButtonText()
+    {
+        if (RangeBox.SelectedIndex == 0) { RangeButton.Content = "全部时间"; return; }
+        if (_rangeStart is { } start && _rangeEnd is { } end)
+            RangeButton.Content = start.Date == end.Date ? start.ToString("yyyy-MM-dd") : $"{start:yyyy-MM-dd} ~ {end:yyyy-MM-dd}";
+    }
+
+    private void ToggleRangePopup(object sender, RoutedEventArgs e)
+    {
+        _rangeAnchor = null;
+        RangePopup.IsOpen = !RangePopup.IsOpen;
+        if (RangePopup.IsOpen) RefreshDayHighlights();
+    }
+
+    private void CalendarPreviewMouseDown(object sender, MouseButtonEventArgs e)
+    {
+        var button = FindAncestor<CalendarDayButton>(e.OriginalSource as DependencyObject);
+        if (button?.DataContext is not DateTime date) return;
+        if (date.Year != RangeCalendar.DisplayDate.Year || date.Month != RangeCalendar.DisplayDate.Month)
+        {
+            _rangeAnchor = null;
+            return;
+        }
+        e.Handled = true;
+        SelectRangeDay(date.Date);
+    }
+
+    private void SelectRangeDay(DateTime date)
+    {
+        if (_rangeAnchor is null)
+        {
+            _rangeAnchor = date;
+            RangeCalendar.SelectedDates.Clear();
+            RangeCalendar.SelectedDates.Add(date);
+            return;
+        }
+
+        var start = _rangeAnchor.Value <= date ? _rangeAnchor.Value : date;
+        var end = _rangeAnchor.Value <= date ? date : _rangeAnchor.Value;
+        _rangeAnchor = null;
+        RangeCalendar.SelectedDates.Clear();
+        RangeCalendar.SelectedDates.AddRange(start, end);
+        _rangeStart = start;
+        _rangeEnd = end;
+        UpdateRangeButtonText();
+        RangePopup.IsOpen = false;
+        if (RangeBox.SelectedIndex != 4) RangeBox.SelectedIndex = 4;
+        else RefreshStatistics();
+    }
+
+    private void CalendarDisplayDateChanged(object sender, CalendarDateChangedEventArgs e) => Dispatcher.InvokeAsync(RefreshDayHighlights);
+
+    private void CalendarSelectedDatesChanged(object sender, SelectionChangedEventArgs e) => RefreshDayHighlights();
 
     private void CalendarDayLoaded(object sender, RoutedEventArgs e)
     {
-        if (sender is not CalendarDayButton button || button.DataContext is not DateTime dateTime) return;
+        if (sender is CalendarDayButton button) ApplyDayHighlight(button);
+    }
+
+    private void RefreshDayHighlights()
+    {
+        if (!IsInitialized) return;
+        foreach (var button in FindDayButtons(RangeCalendar)) ApplyDayHighlight(button);
+    }
+
+    private void ApplyDayHighlight(CalendarDayButton button)
+    {
         button.ClearValue(Control.BackgroundProperty);
         button.ClearValue(Control.BorderBrushProperty);
         button.ClearValue(Control.FontWeightProperty);
+        if (button.DataContext is not DateTime dateTime) return;
+        if (RangeCalendar.SelectedDates.Any(selected => selected.Date == dateTime.Date)) return;
         if (!_datesWithData.Contains(DateOnly.FromDateTime(dateTime))) return;
         button.Background = new SolidColorBrush(Color.FromRgb(221, 210, 237));
         button.BorderBrush = new SolidColorBrush(Color.FromRgb(141, 122, 184));
         button.FontWeight = FontWeights.Bold;
     }
 
-    private void ApplyCustomRange(object sender, RoutedEventArgs e)
+    private static IEnumerable<CalendarDayButton> FindDayButtons(DependencyObject root)
     {
-        if (StartDatePicker.SelectedDate is null || EndDatePicker.SelectedDate is null)
+        var count = VisualTreeHelper.GetChildrenCount(root);
+        for (var index = 0; index < count; index++)
         {
-            MessageBox.Show("请选择开始和结束日期。", "DesktopPet");
-            return;
+            var child = VisualTreeHelper.GetChild(root, index);
+            if (child is CalendarDayButton button) yield return button;
+            else foreach (var nested in FindDayButtons(child)) yield return nested;
         }
-        if (StartDatePicker.SelectedDate > EndDatePicker.SelectedDate)
-        {
-            MessageBox.Show("开始日期不能晚于结束日期。", "DesktopPet");
-            return;
-        }
-        RefreshStatistics();
     }
+
+    private static T? FindAncestor<T>(DependencyObject? source) where T : DependencyObject
+    {
+        for (var current = source; current is not null; current = GetParent(current))
+            if (current is T typed) return typed;
+        return null;
+    }
+
+    private static DependencyObject? GetParent(DependencyObject node) =>
+        node is Visual ? VisualTreeHelper.GetParent(node) : LogicalTreeHelper.GetParent(node);
 
     private (DateOnly? Start, DateOnly? End) GetSelectedRange()
     {
@@ -116,7 +195,7 @@ public partial class KeyboardStatisticsWindow : Window
             1 => (today, today),
             2 => (today.AddDays(-6), today),
             3 => (today.AddDays(-29), today),
-            4 when StartDatePicker.SelectedDate is { } start && EndDatePicker.SelectedDate is { } end =>
+            4 when _rangeStart is { } start && _rangeEnd is { } end =>
                 (DateOnly.FromDateTime(start), DateOnly.FromDateTime(end)),
             4 => (DateOnly.MaxValue, DateOnly.MinValue),
             _ => (null, null)

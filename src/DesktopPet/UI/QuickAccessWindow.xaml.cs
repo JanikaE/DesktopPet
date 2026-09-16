@@ -3,6 +3,7 @@ using DesktopPet.Data;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Media;
 using System.Runtime.InteropServices;
 
 namespace DesktopPet.UI;
@@ -30,7 +31,16 @@ public partial class QuickAccessWindow : Window
         LauncherList.ItemsSource = _repository.GetLaunchers();
     }
 
-    private void TodoTitleLostFocus(object sender, KeyboardFocusChangedEventArgs e)
+    private void TodoTitleLostFocus(object sender, KeyboardFocusChangedEventArgs e) => CommitTodoInput();
+
+    private void TodoTitleKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key is not (Key.Enter or Key.Return)) return;
+        e.Handled = true;
+        CommitTodoInput();
+    }
+
+    private void CommitTodoInput()
     {
         var title = TodoTitleBox.Text.Trim();
         if (title.Length == 0) return;
@@ -53,7 +63,9 @@ public partial class QuickAccessWindow : Window
         if (((FrameworkElement)sender).Tag is TodoItem item) { _repository.DeleteTodo(item.Id); Refresh(); }
     }
 
-    private void ClipboardContentLostFocus(object sender, KeyboardFocusChangedEventArgs e)
+    private void ClipboardContentLostFocus(object sender, KeyboardFocusChangedEventArgs e) => CommitClipboardInput();
+
+    private void CommitClipboardInput()
     {
         var content = ClipboardContentBox.Text;
         if (string.IsNullOrWhiteSpace(content)) return;
@@ -61,6 +73,25 @@ public partial class QuickAccessWindow : Window
         ClipboardContentBox.Clear();
         ClipboardList.ItemsSource = _repository.GetClipboardItems();
     }
+
+    private void WindowPreviewMouseDown(object sender, MouseButtonEventArgs e)
+    {
+        var source = e.OriginalSource as DependencyObject;
+        if (!IsWithin(source, TodoTitleBox)) CommitTodoInput();
+        if (!IsWithin(source, ClipboardContentBox)) CommitClipboardInput();
+    }
+
+    private static bool IsWithin(DependencyObject? source, DependencyObject ancestor)
+    {
+        for (var current = source; current is not null; current = GetParent(current))
+        {
+            if (ReferenceEquals(current, ancestor)) return true;
+        }
+        return false;
+    }
+
+    private static DependencyObject? GetParent(DependencyObject node) =>
+        node is Visual ? VisualTreeHelper.GetParent(node) : LogicalTreeHelper.GetParent(node);
 
     private void ReadClipboard(object sender, RoutedEventArgs e)
     {
