@@ -21,6 +21,8 @@ public sealed class KeyboardStatisticsService : IDisposable
     private readonly Dictionary<DateOnly, Dictionary<int, long>> _pending = [];
     private IntPtr _hook;
 
+    public event EventHandler<int>? KeyPressed;
+
     public KeyboardStatisticsService(DesktopPetRepository repository)
     {
         _repository = repository;
@@ -64,6 +66,7 @@ public sealed class KeyboardStatisticsService : IDisposable
                 var date = DateOnly.FromDateTime(DateTime.Now);
                 if (!_pending.TryGetValue(date, out var counts)) _pending[date] = counts = [];
                 counts[keyCode] = counts.GetValueOrDefault(keyCode) + 1;
+                KeyPressed?.Invoke(this, keyCode);
             }
         }
         return CallNextHookEx(_hook, code, message, data);

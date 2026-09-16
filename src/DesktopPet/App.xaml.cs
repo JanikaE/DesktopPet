@@ -180,7 +180,7 @@ public partial class App : System.Windows.Application
         _quickAccessWindow?.Hide();
         if (_keyboardStatisticsWindow is null)
         {
-            _keyboardStatisticsWindow = new KeyboardStatisticsWindow(_repository, _keyboardStatisticsService.Flush) { Owner = _petWindow };
+            _keyboardStatisticsWindow = new KeyboardStatisticsWindow(_repository, _keyboardStatisticsService) { Owner = _petWindow };
             _keyboardStatisticsWindow.Closed += (_, _) => _keyboardStatisticsWindow = null;
         }
         _keyboardStatisticsWindow.Left = _petWindow.Left - _keyboardStatisticsWindow.Width - 12;

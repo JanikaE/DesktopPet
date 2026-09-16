@@ -5,28 +5,35 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Media.Animation;
 
 namespace DesktopPet.UI;
 
 public partial class KeyboardStatisticsWindow : Window
 {
     private const double KeyWidth = 35;
+    private static readonly Color LiveFlashColor = Color.FromRgb(141, 122, 184);
     private readonly DesktopPetRepository _repository;
     private readonly Action _flushPending;
     private readonly Dictionary<int, List<Border>> _keyViews = [];
+    private readonly Dictionary<int, long> _liveIncrements = [];
     private IReadOnlyDictionary<int, long> _counts = new Dictionary<int, long>();
     private HashSet<DateOnly> _datesWithData = [];
     private DateTime? _rangeStart;
     private DateTime? _rangeEnd;
     private DateTime? _rangeAnchor;
     private bool _updatingDates;
+    private bool _liveRange;
+    private long _maximum = 1;
 
-    public KeyboardStatisticsWindow(DesktopPetRepository repository, Action flushPending)
+    public KeyboardStatisticsWindow(DesktopPetRepository repository, KeyboardStatisticsService keyboardStatistics)
     {
         InitializeComponent();
         SourceInitialized += (_, _) => WindowAppearance.EnableRoundedCorners(this);
         _repository = repository;
-        _flushPending = flushPending;
+        _flushPending = keyboardStatistics.Flush;
+        keyboardStatistics.KeyPressed += OnKeyPressed;
+        Closed += (_, _) => keyboardStatistics.KeyPressed -= OnKeyPressed;
         RangeCalendar.AddHandler(PreviewMouseLeftButtonDownEvent, new MouseButtonEventHandler(CalendarPreviewMouseDown), handledEventsToo: true);
         BuildKeyboard();
         RangeBox.SelectedIndex = 0;
@@ -38,18 +45,107 @@ public partial class KeyboardStatisticsWindow : Window
         _datesWithData = _repository.GetKeyboardStatisticDates().ToHashSet();
         var (start, end) = GetSelectedRange();
         _counts = _repository.GetKeyboardStatistics(start, end);
-        var maximum = Math.Max(1, _counts.Values.DefaultIfEmpty().Max());
+        _liveRange = RangeIncludesToday(start, end);
+        _liveIncrements.Clear();
+        ApplyCounts();
+    }
+
+    private static bool RangeIncludesToday(DateOnly? start, DateOnly? end)
+    {
+        var today = DateOnly.FromDateTime(DateTime.Now);
+        if (start is { } from && today < from) return false;
+        if (end is { } to && today > to) return false;
+        return true;
+    }
+
+    private void ApplyCounts()
+    {
+        _maximum = RecalculateMaximum();
         foreach (var (keyCode, views) in _keyViews)
         {
-            var count = _counts.GetValueOrDefault(keyCode);
+            var count = DisplayCount(keyCode);
             foreach (var view in views)
             {
-                view.Background = HeatBrush(count, maximum);
-                ((TextBlock)((StackPanel)view.Child).Children[1]).Text = count.ToString();
+                view.Background = HeatBrush(count, _maximum);
+                SetCountText(view, count);
             }
         }
-        TotalCountText.Text = $"合计 {_counts.Values.Sum():N0} 次";
+        TotalCountText.Text = $"合计 {DisplayTotal():N0} 次";
     }
+
+    private void OnKeyPressed(object? sender, int keyCode)
+    {
+        if (!IsVisible || !_liveRange) return;
+        if (!_keyViews.TryGetValue(keyCode, out var views)) return;
+        _liveIncrements[keyCode] = _liveIncrements.GetValueOrDefault(keyCode) + 1;
+        var maximum = RecalculateMaximum();
+        if (maximum != _maximum)
+        {
+            _maximum = maximum;
+            ApplyCounts();
+        }
+        else
+        {
+            var count = DisplayCount(keyCode);
+            foreach (var view in views)
+            {
+                view.Background = HeatBrush(count, _maximum);
+                SetCountText(view, count);
+            }
+            TotalCountText.Text = $"合计 {DisplayTotal():N0} 次";
+        }
+        FlashKey(views);
+    }
+
+    private long RecalculateMaximum()
+    {
+        var maximum = 1L;
+        var keyCodes = new HashSet<int>(_counts.Keys);
+        keyCodes.UnionWith(_liveIncrements.Keys);
+        foreach (var keyCode in keyCodes)
+        {
+            var count = DisplayCount(keyCode);
+            if (count > maximum) maximum = count;
+        }
+        return maximum;
+    }
+
+    private long DisplayCount(int keyCode) => _counts.GetValueOrDefault(keyCode) + _liveIncrements.GetValueOrDefault(keyCode);
+
+    private long DisplayTotal() => _counts.Values.Sum() + _liveIncrements.Values.Sum();
+
+    private static void SetCountText(Border view, long count) => ((TextBlock)((StackPanel)view.Child).Children[1]).Text = count.ToString();
+
+    private static void FlashKey(IReadOnlyList<Border> views)
+    {
+        foreach (var view in views)
+        {
+            if (view.Background is SolidColorBrush brush)
+            {
+                brush.BeginAnimation(SolidColorBrush.ColorProperty, new ColorAnimation
+                {
+                    From = LiveFlashColor,
+                    To = brush.Color,
+                    Duration = TimeSpan.FromMilliseconds(280),
+                    FillBehavior = FillBehavior.Stop
+                });
+            }
+            if (view.RenderTransform is ScaleTransform scale)
+            {
+                scale.BeginAnimation(ScaleTransform.ScaleXProperty, CreateGrowAnimation());
+                scale.BeginAnimation(ScaleTransform.ScaleYProperty, CreateGrowAnimation());
+            }
+        }
+    }
+
+    private static DoubleAnimation CreateGrowAnimation() => new()
+    {
+        From = 1,
+        To = 1.15,
+        Duration = TimeSpan.FromMilliseconds(80),
+        AutoReverse = true,
+        FillBehavior = FillBehavior.Stop
+    };
 
     private void RangeChanged(object sender, SelectionChangedEventArgs e)
     {
@@ -249,7 +345,7 @@ public partial class KeyboardStatisticsWindow : Window
                 var content = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
                 content.Children.Add(new TextBlock { Text = key.Label, FontSize = 10, HorizontalAlignment = HorizontalAlignment.Center });
                 content.Children.Add(countText);
-                var border = new Border { Width = KeyWidth * key.Width - 3, Height = 39, Margin = new Thickness(1.5), CornerRadius = new CornerRadius(5), BorderBrush = new SolidColorBrush(Color.FromRgb(205,191,224)), BorderThickness = new Thickness(1), Child = content };
+                var border = new Border { Width = KeyWidth * key.Width - 3, Height = 39, Margin = new Thickness(1.5), CornerRadius = new CornerRadius(5), BorderBrush = new SolidColorBrush(Color.FromRgb(205,191,224)), BorderThickness = new Thickness(1), Child = content, RenderTransform = new ScaleTransform(1, 1), RenderTransformOrigin = new Point(0.5, 0.5) };
                 rowPanel.Children.Add(border);
                 if (!_keyViews.TryGetValue(key.KeyCode.Value, out var views)) _keyViews[key.KeyCode.Value] = views = [];
                 views.Add(border);
