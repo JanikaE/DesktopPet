@@ -20,6 +20,7 @@
       <ContextMenu>
         <MenuItem x:Name="TopmostMenuItem" Header="置顶" IsCheckable="True" IsChecked="True" Click="ToggleTopmost" />
         <MenuItem Header="键盘统计" Click="OpenKeyboardStatistics" />
+        <MenuItem Header="鼠标统计" Click="OpenMouseStatistics" />
         <MenuItem Header="设置" Click="OpenSettings" />
         <Separator />
         <MenuItem Header="退出" Click="ExitApplication" />

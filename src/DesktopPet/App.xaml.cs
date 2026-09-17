@@ -17,6 +17,7 @@ public partial class App : System.Windows.Application
     private SettingsWindow? _settingsWindow;
     private QuickAccessWindow? _quickAccessWindow;
     private KeyboardStatisticsWindow? _keyboardStatisticsWindow;
+    private MouseStatisticsWindow? _mouseStatisticsWindow;
     private double _quickAccessOffsetLeft;
     private double _quickAccessOffsetTop;
     private DesktopPetRepository? _repository;
@@ -25,8 +26,10 @@ public partial class App : System.Windows.Application
     private bool _isPrimaryInstance;
     private bool _restoreQuickAccessAfterTrayShow;
     private bool _restoreKeyboardStatisticsAfterTrayShow;
+    private bool _restoreMouseStatisticsAfterTrayShow;
     private GlobalHotkey? _visibilityHotkey;
     private KeyboardStatisticsService? _keyboardStatisticsService;
+    private MouseStatisticsService? _mouseStatisticsService;
 
     protected override void OnStartup(StartupEventArgs e)
     {
@@ -42,6 +45,7 @@ public partial class App : System.Windows.Application
         _repository = new DesktopPetRepository(AppPaths.DatabasePath);
         _repository.Initialize();
         _keyboardStatisticsService = new KeyboardStatisticsService(_repository);
+        _mouseStatisticsService = new MouseStatisticsService(_repository);
 
         _petWindow = new MainWindow(
             new PetStateMachine(),
@@ -52,6 +56,7 @@ public partial class App : System.Windows.Application
         _petWindow.MonitorDpiChanged += (_, _) => Dispatcher.BeginInvoke(MoveCompanionWindowsWithPet);
         _petWindow.SettingsRequested += (_, _) => ShowSettings();
         _petWindow.KeyboardStatisticsRequested += (_, _) => ShowKeyboardStatistics();
+        _petWindow.MouseStatisticsRequested += (_, _) => ShowMouseStatistics();
         _petWindow.FeatureFlyoutRequested += ToggleFeatureFlyout;
         _petWindow.Show();
 
@@ -67,6 +72,7 @@ public partial class App : System.Windows.Application
         _trayIcon?.Dispose();
         _visibilityHotkey?.Dispose();
         _keyboardStatisticsService?.Dispose();
+        _mouseStatisticsService?.Dispose();
         _activateEvent?.Dispose();
         if (_isPrimaryInstance) _instanceMutex?.ReleaseMutex();
         _instanceMutex?.Dispose();
@@ -105,17 +111,21 @@ public partial class App : System.Windows.Application
         {
             _restoreQuickAccessAfterTrayShow = _quickAccessWindow is { IsVisible: true };
             _restoreKeyboardStatisticsAfterTrayShow = _keyboardStatisticsWindow is { IsVisible: true };
+            _restoreMouseStatisticsAfterTrayShow = _mouseStatisticsWindow is { IsVisible: true };
             _quickAccessWindow?.Hide();
             _keyboardStatisticsWindow?.Hide();
+            _mouseStatisticsWindow?.Hide();
             _petWindow.TogglePetVisibility();
             return;
         }
 
         _petWindow.TogglePetVisibility();
         if (_restoreKeyboardStatisticsAfterTrayShow) ShowKeyboardStatistics();
+        else if (_restoreMouseStatisticsAfterTrayShow) ShowMouseStatistics();
         else if (_restoreQuickAccessAfterTrayShow) ShowFeatureFlyout();
         _restoreQuickAccessAfterTrayShow = false;
         _restoreKeyboardStatisticsAfterTrayShow = false;
+        _restoreMouseStatisticsAfterTrayShow = false;
     }
 
     private void ShowSettings()
@@ -146,6 +156,7 @@ public partial class App : System.Windows.Application
         {
             _quickAccessWindow?.Hide();
             _keyboardStatisticsWindow?.Hide();
+            _mouseStatisticsWindow?.Hide();
         }
     }
 
@@ -153,6 +164,7 @@ public partial class App : System.Windows.Application
     {
         if (_repository is null || _petWindow is null) return;
         _keyboardStatisticsWindow?.Hide();
+        _mouseStatisticsWindow?.Hide();
         if (_quickAccessWindow is { IsVisible: true })
         {
             _quickAccessWindow.Activate();
@@ -178,6 +190,7 @@ public partial class App : System.Windows.Application
     {
         if (_repository is null || _petWindow is null || _keyboardStatisticsService is null) return;
         _quickAccessWindow?.Hide();
+        _mouseStatisticsWindow?.Hide();
         if (_keyboardStatisticsWindow is null)
         {
             _keyboardStatisticsWindow = new KeyboardStatisticsWindow(_repository, _keyboardStatisticsService) { Owner = _petWindow };
@@ -189,6 +202,26 @@ public partial class App : System.Windows.Application
         _petWindow.SetCompanionWindowVisible(true);
         if (!_keyboardStatisticsWindow.IsVisible) _keyboardStatisticsWindow.Show();
         else _keyboardStatisticsWindow.Activate();
+    }
+
+    private void ShowMouseStatistics()
+    {
+        if (_repository is null || _petWindow is null || _mouseStatisticsService is null) return;
+        _quickAccessWindow?.Hide();
+        _keyboardStatisticsWindow?.Hide();
+        if (_mouseStatisticsWindow is null)
+        {
+            _mouseStatisticsWindow = new MouseStatisticsWindow(_repository, _mouseStatisticsService) { Owner = _petWindow };
+            _mouseStatisticsWindow.Closed += (_, _) => _mouseStatisticsWindow = null;
+        }
+        _mouseStatisticsWindow.TargetHeight = _petWindow.Height;
+        _mouseStatisticsWindow.Top = _petWindow.Top;
+        _mouseStatisticsWindow.RefreshStatistics();
+        _petWindow.SetCompanionWindowVisible(true);
+        if (!_mouseStatisticsWindow.IsVisible) _mouseStatisticsWindow.Show();
+        else _mouseStatisticsWindow.Activate();
+        _mouseStatisticsWindow.UpdateLayout();
+        _mouseStatisticsWindow.Left = _petWindow.Left - _mouseStatisticsWindow.Width - 12;
     }
 
     private void MoveCompanionWindowsWithPet()
@@ -203,6 +236,11 @@ public partial class App : System.Windows.Application
         {
             _keyboardStatisticsWindow.Left = _petWindow.Left - _keyboardStatisticsWindow.Width - 12;
             _keyboardStatisticsWindow.Top = _petWindow.Top;
+        }
+        if (_mouseStatisticsWindow is { IsVisible: true })
+        {
+            _mouseStatisticsWindow.Left = _petWindow.Left - _mouseStatisticsWindow.Width - 12;
+            _mouseStatisticsWindow.Top = _petWindow.Top;
         }
     }
 }

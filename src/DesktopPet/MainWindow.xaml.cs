@@ -21,6 +21,7 @@ public partial class MainWindow : Window
     public event EventHandler? MonitorDpiChanged;
     public event Action<bool>? FeatureFlyoutRequested;
     public event EventHandler? KeyboardStatisticsRequested;
+    public event EventHandler? MouseStatisticsRequested;
     public bool IsPetTopmost => Topmost;
     public HotkeyGesture? ToggleVisibilityHotkey { get; private set; }
 
@@ -94,6 +95,7 @@ public partial class MainWindow : Window
     private void ToggleTopmost(object sender, RoutedEventArgs e) => SetPetTopmost(((System.Windows.Controls.MenuItem)sender).IsChecked);
     private void OpenSettings(object sender, RoutedEventArgs e) => SettingsRequested?.Invoke(this, EventArgs.Empty);
     private void OpenKeyboardStatistics(object sender, RoutedEventArgs e) => KeyboardStatisticsRequested?.Invoke(this, EventArgs.Empty);
+    private void OpenMouseStatistics(object sender, RoutedEventArgs e) => MouseStatisticsRequested?.Invoke(this, EventArgs.Empty);
     private void ExitApplication(object sender, RoutedEventArgs e) => Application.Current.Shutdown();
 
     public void TogglePetTopmost() => SetPetTopmost(!Topmost);
