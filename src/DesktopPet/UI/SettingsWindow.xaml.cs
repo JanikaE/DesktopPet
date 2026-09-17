@@ -13,21 +13,32 @@ public partial class SettingsWindow : Window
     private readonly DesktopPetRepository _repository;
     private readonly LauncherDragDrop _launcherDragDrop;
     private readonly Func<HotkeyGesture?, bool> _setVisibilityHotkey;
+    private readonly Func<HotkeyGesture?, bool> _setKeyboardStatisticsHotkey;
+    private readonly Func<HotkeyGesture?, bool> _setMouseStatisticsHotkey;
     private bool _isLoading;
 
-    public SettingsWindow(MainWindow pet, DesktopPetRepository repository, Func<HotkeyGesture?, bool> setVisibilityHotkey)
+    public SettingsWindow(
+        MainWindow pet,
+        DesktopPetRepository repository,
+        Func<HotkeyGesture?, bool> setVisibilityHotkey,
+        Func<HotkeyGesture?, bool> setKeyboardStatisticsHotkey,
+        Func<HotkeyGesture?, bool> setMouseStatisticsHotkey)
     {
         InitializeComponent();
         SourceInitialized += (_, _) => WindowAppearance.EnableRoundedCorners(this);
         _pet = pet;
         _repository = repository;
         _setVisibilityHotkey = setVisibilityHotkey;
+        _setKeyboardStatisticsHotkey = setKeyboardStatisticsHotkey;
+        _setMouseStatisticsHotkey = setMouseStatisticsHotkey;
         _launcherDragDrop = new LauncherDragDrop(LauncherList, repository);
         _repository.LaunchersChanged += RepositoryLaunchersChanged;
         Closed += (_, _) => _repository.LaunchersChanged -= RepositoryLaunchersChanged;
         _isLoading = true;
         TopmostCheckBox.IsChecked = pet.IsPetTopmost;
         VisibilityHotkeyBox.Text = pet.ToggleVisibilityHotkey?.DisplayText ?? "未设置";
+        KeyboardStatisticsHotkeyBox.Text = pet.KeyboardStatisticsHotkey?.DisplayText ?? "未设置";
+        MouseStatisticsHotkeyBox.Text = pet.MouseStatisticsHotkey?.DisplayText ?? "未设置";
         _isLoading = false;
         RefreshLaunchers();
     }
@@ -39,22 +50,7 @@ public partial class SettingsWindow : Window
 
     private void CaptureVisibilityHotkey(object sender, KeyEventArgs e)
     {
-        e.Handled = true;
-        var key = e.Key == Key.System ? e.SystemKey : e.Key;
-        if (key is Key.LeftCtrl or Key.RightCtrl or Key.LeftAlt or Key.RightAlt or Key.LeftShift or Key.RightShift or Key.LWin or Key.RWin) return;
-
-        var modifiers = HotkeyModifiers.None;
-        if (Keyboard.Modifiers.HasFlag(ModifierKeys.Control)) modifiers |= HotkeyModifiers.Control;
-        if (Keyboard.Modifiers.HasFlag(ModifierKeys.Alt)) modifiers |= HotkeyModifiers.Alt;
-        if (Keyboard.Modifiers.HasFlag(ModifierKeys.Shift)) modifiers |= HotkeyModifiers.Shift;
-        if (Keyboard.Modifiers.HasFlag(ModifierKeys.Windows)) modifiers |= HotkeyModifiers.Windows;
-        if (modifiers == HotkeyModifiers.None)
-        {
-            MessageBox.Show("快捷键至少需要包含 Ctrl、Alt、Shift 或 Win 中的一个。", "DesktopPet");
-            return;
-        }
-
-        var gesture = new HotkeyGesture(modifiers, KeyInterop.VirtualKeyFromKey(key));
+        if (TryCaptureGesture(e) is not { } gesture) return;
         if (!_setVisibilityHotkey(gesture))
         {
             MessageBox.Show("这个组合键已被其他程序占用，请换一个组合键。", "DesktopPet");
@@ -67,6 +63,60 @@ public partial class SettingsWindow : Window
     {
         _setVisibilityHotkey(null);
         VisibilityHotkeyBox.Text = "未设置";
+    }
+
+    private void CaptureKeyboardStatisticsHotkey(object sender, KeyEventArgs e)
+    {
+        if (TryCaptureGesture(e) is not { } gesture) return;
+        if (!_setKeyboardStatisticsHotkey(gesture))
+        {
+            MessageBox.Show("这个组合键已被其他程序占用，请换一个组合键。", "DesktopPet");
+            return;
+        }
+        KeyboardStatisticsHotkeyBox.Text = gesture.DisplayText;
+    }
+
+    private void ClearKeyboardStatisticsHotkey(object sender, RoutedEventArgs e)
+    {
+        _setKeyboardStatisticsHotkey(null);
+        KeyboardStatisticsHotkeyBox.Text = "未设置";
+    }
+
+    private void CaptureMouseStatisticsHotkey(object sender, KeyEventArgs e)
+    {
+        if (TryCaptureGesture(e) is not { } gesture) return;
+        if (!_setMouseStatisticsHotkey(gesture))
+        {
+            MessageBox.Show("这个组合键已被其他程序占用，请换一个组合键。", "DesktopPet");
+            return;
+        }
+        MouseStatisticsHotkeyBox.Text = gesture.DisplayText;
+    }
+
+    private void ClearMouseStatisticsHotkey(object sender, RoutedEventArgs e)
+    {
+        _setMouseStatisticsHotkey(null);
+        MouseStatisticsHotkeyBox.Text = "未设置";
+    }
+
+    private static HotkeyGesture? TryCaptureGesture(KeyEventArgs e)
+    {
+        e.Handled = true;
+        var key = e.Key == Key.System ? e.SystemKey : e.Key;
+        if (key is Key.LeftCtrl or Key.RightCtrl or Key.LeftAlt or Key.RightAlt or Key.LeftShift or Key.RightShift or Key.LWin or Key.RWin) return null;
+
+        var modifiers = HotkeyModifiers.None;
+        if (Keyboard.Modifiers.HasFlag(ModifierKeys.Control)) modifiers |= HotkeyModifiers.Control;
+        if (Keyboard.Modifiers.HasFlag(ModifierKeys.Alt)) modifiers |= HotkeyModifiers.Alt;
+        if (Keyboard.Modifiers.HasFlag(ModifierKeys.Shift)) modifiers |= HotkeyModifiers.Shift;
+        if (Keyboard.Modifiers.HasFlag(ModifierKeys.Windows)) modifiers |= HotkeyModifiers.Windows;
+        if (modifiers == HotkeyModifiers.None)
+        {
+            MessageBox.Show("快捷键至少需要包含 Ctrl、Alt、Shift 或 Win 中的一个。", "DesktopPet");
+            return null;
+        }
+
+        return new HotkeyGesture(modifiers, KeyInterop.VirtualKeyFromKey(key));
     }
 
     private void DragSettingsWindow(object sender, MouseButtonEventArgs e)

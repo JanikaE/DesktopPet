@@ -32,18 +32,19 @@ public sealed record HotkeyGesture(HotkeyModifiers Modifiers, int VirtualKey)
 
 public sealed class GlobalHotkey : IDisposable
 {
-    private const int HotkeyId = 0x4450;
     private const int WindowMessageHotkey = 0x0312;
     private const uint NoRepeat = 0x4000;
     private readonly IntPtr _windowHandle;
+    private readonly int _id;
     private readonly HwndSource _source;
     private readonly Action _pressed;
     private bool _registered;
     private HotkeyGesture? _current;
 
-    public GlobalHotkey(IntPtr windowHandle, Action pressed)
+    public GlobalHotkey(IntPtr windowHandle, int id, Action pressed)
     {
         _windowHandle = windowHandle;
+        _id = id;
         _pressed = pressed;
         _source = HwndSource.FromHwnd(windowHandle) ?? throw new InvalidOperationException("无法获取桌宠窗口句柄。");
         _source.AddHook(WindowMessageHook);
@@ -54,7 +55,7 @@ public sealed class GlobalHotkey : IDisposable
         var previous = _current;
         if (_registered)
         {
-            UnregisterHotKey(_windowHandle, HotkeyId);
+            UnregisterHotKey(_windowHandle, _id);
             _registered = false;
         }
 
@@ -63,7 +64,7 @@ public sealed class GlobalHotkey : IDisposable
             _current = null;
             return true;
         }
-        _registered = RegisterHotKey(_windowHandle, HotkeyId, (uint)gesture.Modifiers | NoRepeat, (uint)gesture.VirtualKey);
+        _registered = RegisterHotKey(_windowHandle, _id, (uint)gesture.Modifiers | NoRepeat, (uint)gesture.VirtualKey);
         if (_registered)
         {
             _current = gesture;
@@ -71,20 +72,20 @@ public sealed class GlobalHotkey : IDisposable
         }
 
         if (previous is not null)
-            _registered = RegisterHotKey(_windowHandle, HotkeyId, (uint)previous.Modifiers | NoRepeat, (uint)previous.VirtualKey);
+            _registered = RegisterHotKey(_windowHandle, _id, (uint)previous.Modifiers | NoRepeat, (uint)previous.VirtualKey);
         _current = _registered ? previous : null;
         return false;
     }
 
     public void Dispose()
     {
-        if (_registered) UnregisterHotKey(_windowHandle, HotkeyId);
+        if (_registered) UnregisterHotKey(_windowHandle, _id);
         _source.RemoveHook(WindowMessageHook);
     }
 
     private IntPtr WindowMessageHook(IntPtr hwnd, int message, IntPtr wParam, IntPtr lParam, ref bool handled)
     {
-        if (message == WindowMessageHotkey && wParam.ToInt32() == HotkeyId)
+        if (message == WindowMessageHotkey && wParam.ToInt32() == _id)
         {
             _pressed();
             handled = true;

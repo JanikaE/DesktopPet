@@ -12,6 +12,9 @@ public partial class App : System.Windows.Application
 {
     private const string MutexName = "Local\\DesktopPet.SingleInstance";
     private const string ActivateEventName = "Local\\DesktopPet.Activate";
+    private const int VisibilityHotkeyId = 0x4450;
+    private const int KeyboardStatisticsHotkeyId = 0x4451;
+    private const int MouseStatisticsHotkeyId = 0x4452;
     private Forms.NotifyIcon? _trayIcon;
     private MainWindow? _petWindow;
     private SettingsWindow? _settingsWindow;
@@ -28,6 +31,8 @@ public partial class App : System.Windows.Application
     private bool _restoreKeyboardStatisticsAfterTrayShow;
     private bool _restoreMouseStatisticsAfterTrayShow;
     private GlobalHotkey? _visibilityHotkey;
+    private GlobalHotkey? _keyboardStatisticsHotkey;
+    private GlobalHotkey? _mouseStatisticsHotkey;
     private KeyboardStatisticsService? _keyboardStatisticsService;
     private MouseStatisticsService? _mouseStatisticsService;
 
@@ -60,9 +65,18 @@ public partial class App : System.Windows.Application
         _petWindow.FeatureFlyoutRequested += ToggleFeatureFlyout;
         _petWindow.Show();
 
-        _visibilityHotkey = new GlobalHotkey(new WindowInteropHelper(_petWindow).Handle, ToggleAppVisibility);
-        if (_petWindow.ToggleVisibilityHotkey is { } configuredHotkey && !_visibilityHotkey.TrySet(configuredHotkey))
+        var petHandle = new WindowInteropHelper(_petWindow).Handle;
+        _visibilityHotkey = new GlobalHotkey(petHandle, VisibilityHotkeyId, ToggleAppVisibility);
+        if (_petWindow.ToggleVisibilityHotkey is { } visibilityHotkey && !_visibilityHotkey.TrySet(visibilityHotkey))
             MessageBox.Show("已保存的显示 / 隐藏快捷键被其他程序占用，请在设置中重新配置。", "DesktopPet");
+
+        _keyboardStatisticsHotkey = new GlobalHotkey(petHandle, KeyboardStatisticsHotkeyId, ToggleKeyboardStatistics);
+        if (_petWindow.KeyboardStatisticsHotkey is { } keyboardHotkey && !_keyboardStatisticsHotkey.TrySet(keyboardHotkey))
+            MessageBox.Show("已保存的打开键盘统计快捷键被其他程序占用，请在设置中重新配置。", "DesktopPet");
+
+        _mouseStatisticsHotkey = new GlobalHotkey(petHandle, MouseStatisticsHotkeyId, ToggleMouseStatistics);
+        if (_petWindow.MouseStatisticsHotkey is { } mouseHotkey && !_mouseStatisticsHotkey.TrySet(mouseHotkey))
+            MessageBox.Show("已保存的打开鼠标统计快捷键被其他程序占用，请在设置中重新配置。", "DesktopPet");
 
         _trayIcon = TrayIconFactory.Create(_petWindow, ToggleAppVisibility, ShowSettings, Shutdown);
     }
@@ -71,6 +85,8 @@ public partial class App : System.Windows.Application
     {
         _trayIcon?.Dispose();
         _visibilityHotkey?.Dispose();
+        _keyboardStatisticsHotkey?.Dispose();
+        _mouseStatisticsHotkey?.Dispose();
         _keyboardStatisticsService?.Dispose();
         _mouseStatisticsService?.Dispose();
         _activateEvent?.Dispose();
@@ -137,7 +153,12 @@ public partial class App : System.Windows.Application
             return;
         }
 
-        _settingsWindow = new SettingsWindow(_petWindow, _repository!, SetVisibilityHotkey);
+        _settingsWindow = new SettingsWindow(
+            _petWindow,
+            _repository!,
+            SetVisibilityHotkey,
+            SetKeyboardStatisticsHotkey,
+            SetMouseStatisticsHotkey);
         _settingsWindow.Closed += (_, _) => _settingsWindow = null;
         _settingsWindow.Show();
     }
@@ -146,6 +167,20 @@ public partial class App : System.Windows.Application
     {
         if (_visibilityHotkey is null || _petWindow is null || !_visibilityHotkey.TrySet(hotkey)) return false;
         _petWindow.SetToggleVisibilityHotkey(hotkey);
+        return true;
+    }
+
+    private bool SetKeyboardStatisticsHotkey(HotkeyGesture? hotkey)
+    {
+        if (_keyboardStatisticsHotkey is null || _petWindow is null || !_keyboardStatisticsHotkey.TrySet(hotkey)) return false;
+        _petWindow.SetKeyboardStatisticsHotkey(hotkey);
+        return true;
+    }
+
+    private bool SetMouseStatisticsHotkey(HotkeyGesture? hotkey)
+    {
+        if (_mouseStatisticsHotkey is null || _petWindow is null || !_mouseStatisticsHotkey.TrySet(hotkey)) return false;
+        _petWindow.SetMouseStatisticsHotkey(hotkey);
         return true;
     }
 
@@ -222,6 +257,28 @@ public partial class App : System.Windows.Application
         else _mouseStatisticsWindow.Activate();
         _mouseStatisticsWindow.UpdateLayout();
         _mouseStatisticsWindow.Left = _petWindow.Left - _mouseStatisticsWindow.Width - 12;
+    }
+
+    private void ToggleKeyboardStatistics()
+    {
+        if (_keyboardStatisticsWindow is { IsVisible: true })
+        {
+            _keyboardStatisticsWindow.Hide();
+            _petWindow?.SetCompanionWindowVisible(false);
+            return;
+        }
+        ShowKeyboardStatistics();
+    }
+
+    private void ToggleMouseStatistics()
+    {
+        if (_mouseStatisticsWindow is { IsVisible: true })
+        {
+            _mouseStatisticsWindow.Hide();
+            _petWindow?.SetCompanionWindowVisible(false);
+            return;
+        }
+        ShowMouseStatistics();
     }
 
     private void MoveCompanionWindowsWithPet()

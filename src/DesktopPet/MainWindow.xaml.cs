@@ -24,6 +24,8 @@ public partial class MainWindow : Window
     public event EventHandler? MouseStatisticsRequested;
     public bool IsPetTopmost => Topmost;
     public HotkeyGesture? ToggleVisibilityHotkey { get; private set; }
+    public HotkeyGesture? KeyboardStatisticsHotkey { get; private set; }
+    public HotkeyGesture? MouseStatisticsHotkey { get; private set; }
 
     public MainWindow(PetStateMachine stateMachine, PetImageStatePresenter imagePresenter, PetWindowPlacementStore placementStore)
     {
@@ -142,6 +144,8 @@ public partial class MainWindow : Window
             Left = placement.Left;
             Top = placement.Top;
             ToggleVisibilityHotkey = placement.Hotkey;
+            KeyboardStatisticsHotkey = placement.KeyboardStatisticsHotkey;
+            MouseStatisticsHotkey = placement.MouseStatisticsHotkey;
             SetPetTopmost(placement.Topmost);
         }
 
@@ -160,6 +164,18 @@ public partial class MainWindow : Window
         SavePlacement();
     }
 
+    public void SetKeyboardStatisticsHotkey(HotkeyGesture? hotkey)
+    {
+        KeyboardStatisticsHotkey = hotkey;
+        SavePlacement();
+    }
+
+    public void SetMouseStatisticsHotkey(HotkeyGesture? hotkey)
+    {
+        MouseStatisticsHotkey = hotkey;
+        SavePlacement();
+    }
+
     public void SetCompanionWindowVisible(bool visible)
     {
         _isFeatureFlyoutVisible = visible;
@@ -167,7 +183,13 @@ public partial class MainWindow : Window
         else _stateMachine.FinishAnimation();
     }
 
-    private void SavePlacement() => _placementStore.Save(Left, Top, Topmost, ToggleVisibilityHotkey);
+    private void SavePlacement() => _placementStore.Save(
+        Left,
+        Top,
+        Topmost,
+        ToggleVisibilityHotkey,
+        KeyboardStatisticsHotkey,
+        MouseStatisticsHotkey);
 
     private void KeepWindowVisible()
     {

@@ -10,7 +10,13 @@ public sealed class PetWindowPlacementStore(string path)
         {
             if (!File.Exists(path)) return null;
             var settings = JsonSerializer.Deserialize<PetWindowSettingsDto>(File.ReadAllText(path));
-            return settings is null ? null : new PetWindowSettings(settings.Left, settings.Top, settings.Topmost ?? true, settings.Hotkey);
+            return settings is null ? null : new PetWindowSettings(
+                settings.Left,
+                settings.Top,
+                settings.Topmost ?? true,
+                settings.Hotkey,
+                settings.KeyboardStatisticsHotkey,
+                settings.MouseStatisticsHotkey);
         }
         catch (JsonException)
         {
@@ -18,12 +24,24 @@ public sealed class PetWindowPlacementStore(string path)
         }
     }
 
-    public void Save(double left, double top, bool topmost, HotkeyGesture? hotkey) => File.WriteAllText(
+    public void Save(
+        double left,
+        double top,
+        bool topmost,
+        HotkeyGesture? hotkey,
+        HotkeyGesture? keyboardStatisticsHotkey,
+        HotkeyGesture? mouseStatisticsHotkey) => File.WriteAllText(
         path,
-        JsonSerializer.Serialize(new PetWindowSettings(left, top, topmost, hotkey)));
+        JsonSerializer.Serialize(new PetWindowSettings(left, top, topmost, hotkey, keyboardStatisticsHotkey, mouseStatisticsHotkey)));
 }
 
-public sealed record PetWindowSettings(double Left, double Top, bool Topmost, HotkeyGesture? Hotkey);
+public sealed record PetWindowSettings(
+    double Left,
+    double Top,
+    bool Topmost,
+    HotkeyGesture? Hotkey,
+    HotkeyGesture? KeyboardStatisticsHotkey,
+    HotkeyGesture? MouseStatisticsHotkey);
 
 internal sealed class PetWindowSettingsDto
 {
@@ -31,4 +49,6 @@ internal sealed class PetWindowSettingsDto
     public double Top { get; init; }
     public bool? Topmost { get; init; }
     public HotkeyGesture? Hotkey { get; init; }
+    public HotkeyGesture? KeyboardStatisticsHotkey { get; init; }
+    public HotkeyGesture? MouseStatisticsHotkey { get; init; }
 }
