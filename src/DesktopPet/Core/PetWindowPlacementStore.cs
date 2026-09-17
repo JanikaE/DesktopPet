@@ -16,7 +16,8 @@ public sealed class PetWindowPlacementStore(string path)
                 settings.Topmost ?? true,
                 settings.Hotkey,
                 settings.KeyboardStatisticsHotkey,
-                settings.MouseStatisticsHotkey);
+                settings.MouseStatisticsHotkey,
+                settings.MouseLegendHidden);
         }
         catch (JsonException)
         {
@@ -30,9 +31,10 @@ public sealed class PetWindowPlacementStore(string path)
         bool topmost,
         HotkeyGesture? hotkey,
         HotkeyGesture? keyboardStatisticsHotkey,
-        HotkeyGesture? mouseStatisticsHotkey) => File.WriteAllText(
+        HotkeyGesture? mouseStatisticsHotkey,
+        bool[]? mouseLegendHidden) => File.WriteAllText(
         path,
-        JsonSerializer.Serialize(new PetWindowSettings(left, top, topmost, hotkey, keyboardStatisticsHotkey, mouseStatisticsHotkey)));
+        JsonSerializer.Serialize(new PetWindowSettings(left, top, topmost, hotkey, keyboardStatisticsHotkey, mouseStatisticsHotkey, mouseLegendHidden)));
 }
 
 public sealed record PetWindowSettings(
@@ -41,7 +43,8 @@ public sealed record PetWindowSettings(
     bool Topmost,
     HotkeyGesture? Hotkey,
     HotkeyGesture? KeyboardStatisticsHotkey,
-    HotkeyGesture? MouseStatisticsHotkey);
+    HotkeyGesture? MouseStatisticsHotkey,
+    bool[]? MouseLegendHidden);
 
 internal sealed class PetWindowSettingsDto
 {
@@ -51,4 +54,5 @@ internal sealed class PetWindowSettingsDto
     public HotkeyGesture? Hotkey { get; init; }
     public HotkeyGesture? KeyboardStatisticsHotkey { get; init; }
     public HotkeyGesture? MouseStatisticsHotkey { get; init; }
+    public bool[]? MouseLegendHidden { get; init; }
 }

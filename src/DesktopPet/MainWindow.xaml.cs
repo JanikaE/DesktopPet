@@ -26,6 +26,7 @@ public partial class MainWindow : Window
     public HotkeyGesture? ToggleVisibilityHotkey { get; private set; }
     public HotkeyGesture? KeyboardStatisticsHotkey { get; private set; }
     public HotkeyGesture? MouseStatisticsHotkey { get; private set; }
+    public bool[] MouseLegendHidden { get; private set; } = [false, false, false, false];
 
     public MainWindow(PetStateMachine stateMachine, PetImageStatePresenter imagePresenter, PetWindowPlacementStore placementStore)
     {
@@ -146,6 +147,7 @@ public partial class MainWindow : Window
             ToggleVisibilityHotkey = placement.Hotkey;
             KeyboardStatisticsHotkey = placement.KeyboardStatisticsHotkey;
             MouseStatisticsHotkey = placement.MouseStatisticsHotkey;
+            if (placement.MouseLegendHidden is { Length: 4 } legendHidden) MouseLegendHidden = legendHidden;
             SetPetTopmost(placement.Topmost);
         }
 
@@ -176,6 +178,12 @@ public partial class MainWindow : Window
         SavePlacement();
     }
 
+    public void SetMouseLegendHidden(bool[] hidden)
+    {
+        MouseLegendHidden = hidden;
+        SavePlacement();
+    }
+
     public void SetCompanionWindowVisible(bool visible)
     {
         _isFeatureFlyoutVisible = visible;
@@ -189,7 +197,8 @@ public partial class MainWindow : Window
         Topmost,
         ToggleVisibilityHotkey,
         KeyboardStatisticsHotkey,
-        MouseStatisticsHotkey);
+        MouseStatisticsHotkey,
+        MouseLegendHidden);
 
     private void KeepWindowVisible()
     {

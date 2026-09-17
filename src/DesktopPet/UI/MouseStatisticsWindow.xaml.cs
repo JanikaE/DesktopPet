@@ -38,7 +38,10 @@ public partial class MouseStatisticsWindow : Window
 
     private readonly DesktopPetRepository _repository;
     private readonly Action _flushPending;
+    private readonly Action<bool[]> _saveLegendHidden;
     private readonly DispatcherTimer _liveRepaintTimer;
+    private readonly StackPanel[] _legendEntries = new StackPanel[ButtonColors.Length];
+    private readonly bool[] _visibleButtons;
     private readonly Dictionary<(int X, int Y), long> _moves = [];
     private readonly Dictionary<(int X, int Y, int Button), long> _clicks = [];
     private readonly Dictionary<(int X, int Y), long> _liveMoves = [];
@@ -68,12 +71,15 @@ public partial class MouseStatisticsWindow : Window
     private int _lastLiveY;
     private bool _hasLastLive;
 
-    public MouseStatisticsWindow(DesktopPetRepository repository, MouseStatisticsService mouseStatistics)
+    public MouseStatisticsWindow(DesktopPetRepository repository, MouseStatisticsService mouseStatistics, bool[] hiddenButtons, Action<bool[]> saveLegendHidden)
     {
         InitializeComponent();
         SourceInitialized += (_, _) => WindowAppearance.EnableRoundedCorners(this);
         _repository = repository;
         _flushPending = mouseStatistics.Flush;
+        _saveLegendHidden = saveLegendHidden;
+        _visibleButtons = new bool[ButtonColors.Length];
+        for (var index = 0; index < _visibleButtons.Length; index++) _visibleButtons[index] = !(index < hiddenButtons.Length && hiddenButtons[index]);
         _liveRepaintTimer = new DispatcherTimer { Interval = LiveRepaintInterval };
         _liveRepaintTimer.Tick += (_, _) => OnLiveRepaintTick();
         _liveRepaintTimer.Start();
@@ -228,10 +234,33 @@ public partial class MouseStatisticsWindow : Window
         for (var index = 0; index < ButtonColors.Length; index++)
         {
             var dot = new Ellipse { Width = 10, Height = 10, Fill = new SolidColorBrush(ButtonColors[index]), VerticalAlignment = VerticalAlignment.Center };
-            var label = new TextBlock { Text = ButtonNames[index], Margin = new Thickness(5, 0, 14, 0), FontSize = 12, Foreground = new SolidColorBrush(Color.FromRgb(101, 86, 127)) };
-            LegendPanel.Children.Add(dot);
-            LegendPanel.Children.Add(label);
+            var label = new TextBlock { Text = ButtonNames[index], Margin = new Thickness(5, 0, 12, 0), FontSize = 12, Foreground = new SolidColorBrush(Color.FromRgb(101, 86, 127)), VerticalAlignment = VerticalAlignment.Center };
+            var entry = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center, Cursor = Cursors.Hand, Tag = index, ToolTip = "点击隐藏 / 显示该颜色的圆点" };
+            entry.Children.Add(dot);
+            entry.Children.Add(label);
+            entry.MouseLeftButtonUp += ToggleLegendButton;
+            _legendEntries[index] = entry;
+            LegendPanel.Children.Add(entry);
+            UpdateLegendEntry(index);
         }
+    }
+
+    private void ToggleLegendButton(object sender, MouseButtonEventArgs e)
+    {
+        var index = (int)((FrameworkElement)sender).Tag;
+        _visibleButtons[index] = !_visibleButtons[index];
+        UpdateLegendEntry(index);
+        RenderClickMarkers();
+        var hidden = new bool[_visibleButtons.Length];
+        for (var button = 0; button < hidden.Length; button++) hidden[button] = !_visibleButtons[button];
+        _saveLegendHidden(hidden);
+    }
+
+    private void UpdateLegendEntry(int index)
+    {
+        var entry = _legendEntries[index];
+        entry.Opacity = _visibleButtons[index] ? 1 : 0.35;
+        if (entry.Children[1] is TextBlock label) label.TextDecorations = _visibleButtons[index] ? null : TextDecorations.Strikethrough;
     }
 
     private void RenderHeatmap()
@@ -283,8 +312,8 @@ public partial class MouseStatisticsWindow : Window
     {
         MarkerCanvas.Children.Clear();
         var merged = new Dictionary<(int X, int Y), long[]>();
-        foreach (var ((x, y, button), count) in _clicks) AccumulateCell(merged, x, y, button, count);
-        foreach (var ((x, y, button), count) in _liveClicks) AccumulateCell(merged, x, y, button, count);
+        foreach (var ((x, y, button), count) in _clicks) { if (_visibleButtons[button]) AccumulateCell(merged, x, y, button, count); }
+        foreach (var ((x, y, button), count) in _liveClicks) { if (_visibleButtons[button]) AccumulateCell(merged, x, y, button, count); }
         if (merged.Count == 0) return;
         var maximum = Math.Max(1, merged.Values.Max(counts => counts.Sum()));
 
@@ -292,7 +321,7 @@ public partial class MouseStatisticsWindow : Window
         {
             var total = counts.Sum();
             var position = CellCenter((x, y));
-            var diameter = 8 + 14 * Math.Sqrt((double)total / maximum);
+            var diameter = 4 + 12 * Math.Sqrt((double)total / maximum);
             var color = ButtonColors[DominantButton(counts)];
             var ellipse = new Ellipse
             {

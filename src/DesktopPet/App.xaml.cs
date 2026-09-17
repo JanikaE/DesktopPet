@@ -246,7 +246,7 @@ public partial class App : System.Windows.Application
         _keyboardStatisticsWindow?.Hide();
         if (_mouseStatisticsWindow is null)
         {
-            _mouseStatisticsWindow = new MouseStatisticsWindow(_repository, _mouseStatisticsService) { Owner = _petWindow };
+            _mouseStatisticsWindow = new MouseStatisticsWindow(_repository, _mouseStatisticsService, _petWindow.MouseLegendHidden, _petWindow.SetMouseLegendHidden) { Owner = _petWindow };
             _mouseStatisticsWindow.Closed += (_, _) => _mouseStatisticsWindow = null;
         }
         _mouseStatisticsWindow.TargetHeight = _petWindow.Height;
