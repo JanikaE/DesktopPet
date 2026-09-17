@@ -15,10 +15,6 @@ namespace DesktopPet.UI;
 
 public partial class MouseStatisticsWindow : Window
 {
-    private const int SmXVirtualScreen = 76;
-    private const int SmYVirtualScreen = 77;
-    private const int SmCxVirtualScreen = 78;
-    private const int SmCyVirtualScreen = 79;
     private const double MaxMapWidth = 734;
     private const double HorizontalChrome = 28;
     private const double DefaultChromeHeight = 88;
@@ -58,10 +54,8 @@ public partial class MouseStatisticsWindow : Window
     private bool _updatingDates;
     private bool _liveRange;
     private bool _heatmapDirty = true;
-    private int _virtualLeft;
-    private int _virtualTop;
-    private int _virtualWidth = 1;
-    private int _virtualHeight = 1;
+    private int _referenceWidth = 1;
+    private int _referenceHeight = 1;
     private double _mapWidth = MaxMapWidth;
     private double _mapHeight = MaxMapWidth * 9 / 16;
     private double _targetHeight = 384;
@@ -201,11 +195,8 @@ public partial class MouseStatisticsWindow : Window
 
     private void UpdateMapLayout()
     {
-        _virtualLeft = GetSystemMetrics(SmXVirtualScreen);
-        _virtualTop = GetSystemMetrics(SmYVirtualScreen);
-        _virtualWidth = Math.Max(1, GetSystemMetrics(SmCxVirtualScreen));
-        _virtualHeight = Math.Max(1, GetSystemMetrics(SmCyVirtualScreen));
-        var aspect = (double)_virtualWidth / _virtualHeight;
+        (_referenceWidth, _referenceHeight) = MouseGridGeometry.GetPrimaryScreenSize();
+        var aspect = (double)_referenceWidth / _referenceHeight;
         var availableHeight = Math.Max(120, _targetHeight - (_chromeHeight > 0 ? _chromeHeight : DefaultChromeHeight));
         _mapHeight = availableHeight;
         _mapWidth = _mapHeight * aspect;
@@ -277,10 +268,10 @@ public partial class MouseStatisticsWindow : Window
 
         foreach (var (cell, count) in merged)
         {
-            var x0 = (int)Math.Floor(((double)cell.X * MouseStatisticsService.GridCellSize - _virtualLeft) / _virtualWidth * width);
-            var y0 = (int)Math.Floor(((double)cell.Y * MouseStatisticsService.GridCellSize - _virtualTop) / _virtualHeight * height);
-            var x1 = (int)Math.Ceiling(((double)(cell.X + 1) * MouseStatisticsService.GridCellSize - _virtualLeft) / _virtualWidth * width);
-            var y1 = (int)Math.Ceiling(((double)(cell.Y + 1) * MouseStatisticsService.GridCellSize - _virtualTop) / _virtualHeight * height);
+            var x0 = CellBoundary(cell.X, width, MouseGridGeometry.Columns);
+            var y0 = CellBoundary(cell.Y, height, MouseGridGeometry.Rows);
+            var x1 = CellBoundary(cell.X + 1, width, MouseGridGeometry.Columns);
+            var y1 = CellBoundary(cell.Y + 1, height, MouseGridGeometry.Rows);
             if (x0 < 0) x0 = 0;
             if (y0 < 0) y0 = 0;
             if (x1 > width) x1 = width;
@@ -458,15 +449,25 @@ public partial class MouseStatisticsWindow : Window
         return meters >= 1000 ? $"{meters / 1000:0.00} km" : $"{meters:0.0} m";
     }
 
-    private (int X, int Y) ToCell(int x, int y) =>
-        ((int)Math.Floor((double)x / MouseStatisticsService.GridCellSize), (int)Math.Floor((double)y / MouseStatisticsService.GridCellSize));
+    private static int CellBoundary(int index, int pixels, int cells)
+    {
+        var boundary = (int)Math.Round((double)index * pixels / cells);
+        return Math.Clamp(boundary, 0, pixels);
+    }
 
-    private Point CellCenter((int X, int Y) cell) =>
-        MapPoint((int)((cell.X + 0.5) * MouseStatisticsService.GridCellSize), (int)((cell.Y + 0.5) * MouseStatisticsService.GridCellSize));
+    private static (int X, int Y) ToCell(int x, int y) => MouseGridGeometry.ToCell(x, y);
 
-    private Point MapPoint(int x, int y) => new(
-        (x - _virtualLeft) / (double)_virtualWidth * _mapWidth,
-        (y - _virtualTop) / (double)_virtualHeight * _mapHeight);
+    private Point CellCenter((int X, int Y) cell) => new(
+        (cell.X + 0.5) * _mapWidth / MouseGridGeometry.Columns,
+        (cell.Y + 0.5) * _mapHeight / MouseGridGeometry.Rows);
+
+    private Point MapPoint(int x, int y)
+    {
+        var (left, top, width, height) = MouseGridGeometry.GetMonitorBounds(x, y);
+        var normalizedX = Math.Clamp((x - (double)left) / Math.Max(1, width), 0, 1);
+        var normalizedY = Math.Clamp((y - (double)top) / Math.Max(1, height), 0, 1);
+        return new Point(normalizedX * _mapWidth, normalizedY * _mapHeight);
+    }
 
     private void RangeChanged(object sender, SelectionChangedEventArgs e)
     {
@@ -618,6 +619,4 @@ public partial class MouseStatisticsWindow : Window
             _ => (null, null)
         };
     }
-
-    [DllImport("user32.dll")] private static extern int GetSystemMetrics(int index);
 }

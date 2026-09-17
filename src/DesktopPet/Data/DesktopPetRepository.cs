@@ -4,6 +4,8 @@ namespace DesktopPet.Data;
 
 public sealed class DesktopPetRepository(string databasePath)
 {
+    private const int MouseGridSchemaVersion = 1;
+
     private readonly string _connectionString = new SqliteConnectionStringBuilder { DataSource = databasePath }.ToString();
     public event EventHandler? LaunchersChanged;
 
@@ -69,6 +71,18 @@ public sealed class DesktopPetRepository(string databasePath)
             using var migrationCommand = connection.CreateCommand();
             migrationCommand.CommandText = "ALTER TABLE launchers ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0; UPDATE launchers SET sort_order = id;";
             migrationCommand.ExecuteNonQuery();
+        }
+
+        using var versionCommand = connection.CreateCommand();
+        versionCommand.CommandText = "PRAGMA user_version;";
+        if (Convert.ToInt32(versionCommand.ExecuteScalar()) < MouseGridSchemaVersion)
+        {
+            using var clearCommand = connection.CreateCommand();
+            clearCommand.CommandText = "DELETE FROM mouse_heatmap; DELETE FROM mouse_clicks;";
+            clearCommand.ExecuteNonQuery();
+            using var setVersionCommand = connection.CreateCommand();
+            setVersionCommand.CommandText = $"PRAGMA user_version = {MouseGridSchemaVersion};";
+            setVersionCommand.ExecuteNonQuery();
         }
     }
 

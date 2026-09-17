@@ -7,8 +7,6 @@ namespace DesktopPet.Core;
 
 public sealed class MouseStatisticsService : IDisposable
 {
-    public const int GridCellSize = 64;
-
     private const int LowLevelMouseHook = 14;
     private const int MouseMove = 0x0200;
     private const int LeftButtonDown = 0x0201;
@@ -201,8 +199,7 @@ public sealed class MouseStatisticsService : IDisposable
         return accumulator;
     }
 
-    private static (int X, int Y) ToCell(int x, int y) =>
-        ((int)Math.Floor((double)x / GridCellSize), (int)Math.Floor((double)y / GridCellSize));
+    private static (int X, int Y) ToCell(int x, int y) => MouseGridGeometry.ToCell(x, y);
 
     private static readonly IReadOnlyDictionary<(int X, int Y), long> EmptyMoves = new Dictionary<(int X, int Y), long>();
     private static readonly IReadOnlyDictionary<(int X, int Y, int Button), long> EmptyClicks = new Dictionary<(int X, int Y, int Button), long>();
