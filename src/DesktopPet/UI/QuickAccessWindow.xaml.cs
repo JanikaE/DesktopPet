@@ -19,8 +19,13 @@ public partial class QuickAccessWindow : Window
         SourceInitialized += (_, _) => WindowAppearance.EnableRoundedCorners(this);
         _repository = repository;
         _launcherDragDrop = new LauncherDragDrop(LauncherList, repository);
+        _repository.TodosChanged += RepositoryTodosChanged;
         _repository.LaunchersChanged += RepositoryLaunchersChanged;
-        Closed += (_, _) => _repository.LaunchersChanged -= RepositoryLaunchersChanged;
+        Closed += (_, _) =>
+        {
+            _repository.TodosChanged -= RepositoryTodosChanged;
+            _repository.LaunchersChanged -= RepositoryLaunchersChanged;
+        };
         Refresh();
     }
 
@@ -46,7 +51,6 @@ public partial class QuickAccessWindow : Window
         if (title.Length == 0) return;
         _repository.AddTodo(title);
         TodoTitleBox.Clear();
-        Refresh();
     }
 
     private void TodoChanged(object sender, RoutedEventArgs e)
@@ -54,13 +58,12 @@ public partial class QuickAccessWindow : Window
         if (((FrameworkElement)sender).Tag is TodoItem item)
         {
             _repository.SetTodoCompleted(item.Id, ((CheckBox)sender).IsChecked == true);
-            Refresh();
         }
     }
 
     private void DeleteTodo(object sender, RoutedEventArgs e)
     {
-        if (((FrameworkElement)sender).Tag is TodoItem item) { _repository.DeleteTodo(item.Id); Refresh(); }
+        if (((FrameworkElement)sender).Tag is TodoItem item) _repository.DeleteTodo(item.Id);
     }
 
     private void ClipboardContentLostFocus(object sender, KeyboardFocusChangedEventArgs e) => CommitClipboardInput();
@@ -135,6 +138,7 @@ public partial class QuickAccessWindow : Window
     }
 
     private void RepositoryLaunchersChanged(object? sender, EventArgs e) => LauncherList.ItemsSource = _repository.GetLaunchers();
+    private void RepositoryTodosChanged(object? sender, EventArgs e) => Dispatcher.BeginInvoke(() => TodoList.ItemsSource = _repository.GetTodos());
     private void LauncherPreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e) => _launcherDragDrop.PreviewMouseLeftButtonDown(e);
     private void LauncherPreviewMouseMove(object sender, MouseEventArgs e) => _launcherDragDrop.PreviewMouseMove(e);
     private void LauncherDrop(object sender, DragEventArgs e) => _launcherDragDrop.Drop(e);

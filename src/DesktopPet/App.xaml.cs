@@ -1,4 +1,5 @@
 using DesktopPet.Core;
+using DesktopPet.Core.Sync;
 using DesktopPet.Data;
 using DesktopPet.Pet;
 using DesktopPet.UI;
@@ -24,6 +25,7 @@ public partial class App : System.Windows.Application
     private double _quickAccessOffsetLeft;
     private double _quickAccessOffsetTop;
     private DesktopPetRepository? _repository;
+    private TodoFileSyncService? _todoSyncService;
     private System.Threading.Mutex? _instanceMutex;
     private System.Threading.EventWaitHandle? _activateEvent;
     private bool _isPrimaryInstance;
@@ -49,6 +51,8 @@ public partial class App : System.Windows.Application
         ApplicationShortcutService.EnsureDesktopAndStartupShortcuts();
         _repository = new DesktopPetRepository(AppPaths.DatabasePath);
         _repository.Initialize();
+        _todoSyncService = new TodoFileSyncService(_repository);
+        _todoSyncService.Start();
         _keyboardStatisticsService = new KeyboardStatisticsService(_repository);
         _mouseStatisticsService = new MouseStatisticsService(_repository);
 
@@ -89,6 +93,7 @@ public partial class App : System.Windows.Application
         _mouseStatisticsHotkey?.Dispose();
         _keyboardStatisticsService?.Dispose();
         _mouseStatisticsService?.Dispose();
+        _todoSyncService?.Dispose();
         _activateEvent?.Dispose();
         if (_isPrimaryInstance) _instanceMutex?.ReleaseMutex();
         _instanceMutex?.Dispose();
@@ -156,6 +161,7 @@ public partial class App : System.Windows.Application
         _settingsWindow = new SettingsWindow(
             _petWindow,
             _repository!,
+            _todoSyncService!,
             SetVisibilityHotkey,
             SetKeyboardStatisticsHotkey,
             SetMouseStatisticsHotkey);

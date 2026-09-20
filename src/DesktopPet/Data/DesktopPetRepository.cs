@@ -1,12 +1,17 @@
+using DesktopPet.Core.Sync;
 using Microsoft.Data.Sqlite;
+using System.Globalization;
 
 namespace DesktopPet.Data;
 
 public sealed class DesktopPetRepository(string databasePath)
 {
     private const int MouseGridSchemaVersion = 1;
+    private const int CurrentSchemaVersion = 2;
 
     private readonly string _connectionString = new SqliteConnectionStringBuilder { DataSource = databasePath }.ToString();
+    private readonly object _todoGate = new();
+    public event EventHandler? TodosChanged;
     public event EventHandler? LaunchersChanged;
 
     public void Initialize()
@@ -61,6 +66,21 @@ public sealed class DesktopPetRepository(string databasePath)
               wheel_units INTEGER NOT NULL,
               double_clicks INTEGER NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS sync_metadata (
+              key TEXT PRIMARY KEY,
+              value TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS todo_sync_operations (
+              operation_id TEXT PRIMARY KEY,
+              item_sync_id TEXT NOT NULL,
+              device_id TEXT NOT NULL,
+              counter INTEGER NOT NULL,
+              kind TEXT NOT NULL,
+              title TEXT NULL,
+              is_completed INTEGER NULL,
+              created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_todo_sync_operations_item ON todo_sync_operations(item_sync_id);
             """;
         command.ExecuteNonQuery();
 
@@ -84,31 +104,200 @@ public sealed class DesktopPetRepository(string databasePath)
             setVersionCommand.CommandText = $"PRAGMA user_version = {MouseGridSchemaVersion};";
             setVersionCommand.ExecuteNonQuery();
         }
+
+        EnsureTodoSyncSchema(connection);
     }
 
     public IReadOnlyList<TodoItem> GetTodos()
     {
-        using var connection = OpenConnection();
-        using var command = connection.CreateCommand();
-        command.CommandText = "SELECT id, title, is_completed FROM todos ORDER BY is_completed, id DESC;";
-        using var reader = command.ExecuteReader();
-        var results = new List<TodoItem>();
-        while (reader.Read()) results.Add(new TodoItem(reader.GetInt64(0), reader.GetString(1), reader.GetBoolean(2)));
-        return results;
+        lock (_todoGate)
+        {
+            using var connection = OpenConnection();
+            using var command = connection.CreateCommand();
+            command.CommandText = "SELECT sync_id, title, is_completed FROM todos WHERE deleted_at IS NULL ORDER BY is_completed, created_at DESC, id DESC;";
+            using var reader = command.ExecuteReader();
+            var results = new List<TodoItem>();
+            while (reader.Read())
+            {
+                if (!Guid.TryParse(reader.GetString(0), out var id)) continue;
+                results.Add(new TodoItem(id, reader.GetString(1), reader.GetBoolean(2)));
+            }
+            return results;
+        }
     }
 
     public TodoItem AddTodo(string title)
     {
-        using var connection = OpenConnection();
-        using var command = connection.CreateCommand();
-        command.CommandText = "INSERT INTO todos (title, is_completed, created_at) VALUES ($title, 0, $createdAt); SELECT last_insert_rowid();";
-        command.Parameters.AddWithValue("$title", title);
-        command.Parameters.AddWithValue("$createdAt", DateTimeOffset.UtcNow.ToString("O"));
-        return new TodoItem((long)command.ExecuteScalar()!, title, false);
+        var itemId = Guid.NewGuid();
+        var createdAt = DateTimeOffset.UtcNow;
+        lock (_todoGate)
+        {
+            using var connection = OpenConnection();
+            using var transaction = connection.BeginTransaction();
+            var deviceId = GetDeviceId(connection, transaction);
+            var counter = NextTodoClock(connection, transaction);
+
+            using var command = connection.CreateCommand();
+            command.Transaction = transaction;
+            command.CommandText = "INSERT INTO todos (sync_id, title, is_completed, created_at, deleted_at) VALUES ($id, $title, 0, $createdAt, NULL);";
+            command.Parameters.AddWithValue("$id", itemId.ToString("D"));
+            command.Parameters.AddWithValue("$title", title);
+            command.Parameters.AddWithValue("$createdAt", createdAt.ToString("O"));
+            command.ExecuteNonQuery();
+            InsertTodoOperation(connection, transaction, new TodoSyncOperation(Guid.NewGuid(), itemId, deviceId, counter, TodoSyncOperationKinds.Add, title, false, createdAt));
+            transaction.Commit();
+        }
+
+        var item = new TodoItem(itemId, title, false);
+        TodosChanged?.Invoke(this, EventArgs.Empty);
+        return item;
     }
 
-    public void SetTodoCompleted(long id, bool isCompleted) => Execute("UPDATE todos SET is_completed = $completed WHERE id = $id;", ("$id", id), ("$completed", isCompleted));
-    public void DeleteTodo(long id) => Execute("DELETE FROM todos WHERE id = $id;", ("$id", id));
+    public void SetTodoCompleted(Guid id, bool isCompleted)
+    {
+        var changed = false;
+        lock (_todoGate)
+        {
+            using var connection = OpenConnection();
+            using var transaction = connection.BeginTransaction();
+            using var readCommand = connection.CreateCommand();
+            readCommand.Transaction = transaction;
+            readCommand.CommandText = "SELECT is_completed FROM todos WHERE sync_id = $id AND deleted_at IS NULL;";
+            readCommand.Parameters.AddWithValue("$id", id.ToString("D"));
+            var current = readCommand.ExecuteScalar();
+            if (current is null || Convert.ToBoolean(current) == isCompleted) return;
+
+            using var updateCommand = connection.CreateCommand();
+            updateCommand.Transaction = transaction;
+            updateCommand.CommandText = "UPDATE todos SET is_completed = $completed WHERE sync_id = $id AND deleted_at IS NULL;";
+            updateCommand.Parameters.AddWithValue("$id", id.ToString("D"));
+            updateCommand.Parameters.AddWithValue("$completed", isCompleted);
+            changed = updateCommand.ExecuteNonQuery() > 0;
+            if (changed)
+            {
+                var operation = new TodoSyncOperation(Guid.NewGuid(), id, GetDeviceId(connection, transaction), NextTodoClock(connection, transaction), TodoSyncOperationKinds.SetCompleted, null, isCompleted, DateTimeOffset.UtcNow);
+                InsertTodoOperation(connection, transaction, operation);
+            }
+            transaction.Commit();
+        }
+        if (changed) TodosChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    public void DeleteTodo(Guid id)
+    {
+        var changed = false;
+        var deletedAt = DateTimeOffset.UtcNow;
+        lock (_todoGate)
+        {
+            using var connection = OpenConnection();
+            using var transaction = connection.BeginTransaction();
+            using var command = connection.CreateCommand();
+            command.Transaction = transaction;
+            command.CommandText = "UPDATE todos SET deleted_at = $deletedAt WHERE sync_id = $id AND deleted_at IS NULL;";
+            command.Parameters.AddWithValue("$id", id.ToString("D"));
+            command.Parameters.AddWithValue("$deletedAt", deletedAt.ToString("O"));
+            changed = command.ExecuteNonQuery() > 0;
+            if (changed)
+            {
+                var operation = new TodoSyncOperation(Guid.NewGuid(), id, GetDeviceId(connection, transaction), NextTodoClock(connection, transaction), TodoSyncOperationKinds.Delete, null, null, deletedAt);
+                InsertTodoOperation(connection, transaction, operation);
+            }
+            transaction.Commit();
+        }
+        if (changed) TodosChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    public IReadOnlyList<TodoSyncOperation> GetTodoSyncOperations()
+    {
+        lock (_todoGate)
+        {
+            using var connection = OpenConnection();
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+                SELECT operation_id, item_sync_id, device_id, counter, kind, title, is_completed, created_at
+                FROM todo_sync_operations
+                ORDER BY counter, device_id, operation_id;
+                """;
+            using var reader = command.ExecuteReader();
+            var operations = new List<TodoSyncOperation>();
+            while (reader.Read())
+            {
+                if (!Guid.TryParse(reader.GetString(0), out var operationId) ||
+                    !Guid.TryParse(reader.GetString(1), out var itemId) ||
+                    !Guid.TryParse(reader.GetString(2), out var deviceId) ||
+                    !DateTimeOffset.TryParse(reader.GetString(7), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var createdAt))
+                    continue;
+                operations.Add(new TodoSyncOperation(
+                    operationId,
+                    itemId,
+                    deviceId,
+                    reader.GetInt64(3),
+                    reader.GetString(4),
+                    reader.IsDBNull(5) ? null : reader.GetString(5),
+                    reader.IsDBNull(6) ? null : reader.GetBoolean(6),
+                    createdAt));
+            }
+            return operations;
+        }
+    }
+
+    public int MergeTodoSyncOperations(IEnumerable<TodoSyncOperation> incomingOperations)
+    {
+        var operations = incomingOperations
+            .Where(TodoMergeEngine.IsValid)
+            .GroupBy(operation => operation.OperationId)
+            .Select(group => group.First())
+            .ToArray();
+        if (operations.Length == 0) return 0;
+
+        var inserted = 0;
+        lock (_todoGate)
+        {
+            using var connection = OpenConnection();
+            using var transaction = connection.BeginTransaction();
+            foreach (var operation in operations)
+                inserted += InsertTodoOperation(connection, transaction, operation, ignoreExisting: true);
+
+            var observedCounter = operations.Max(operation => operation.Counter);
+            var currentCounter = GetMetadataLong(connection, transaction, "todo_sync_clock");
+            if (observedCounter > currentCounter)
+                SetMetadata(connection, transaction, "todo_sync_clock", observedCounter.ToString(CultureInfo.InvariantCulture));
+
+            if (inserted > 0) RebuildTodosFromOperations(connection, transaction);
+            transaction.Commit();
+        }
+
+        if (inserted > 0) TodosChanged?.Invoke(this, EventArgs.Empty);
+        return inserted;
+    }
+
+    public TodoSyncConfiguration GetTodoSyncConfiguration()
+    {
+        lock (_todoGate)
+        {
+            using var connection = OpenConnection();
+            using var transaction = connection.BeginTransaction();
+            var configuration = new TodoSyncConfiguration(
+                string.Equals(GetMetadata(connection, transaction, "todo_sync_enabled"), "1", StringComparison.Ordinal),
+                GetMetadata(connection, transaction, "todo_sync_directory"),
+                GetDeviceId(connection, transaction));
+            transaction.Commit();
+            return configuration;
+        }
+    }
+
+    public void SetTodoSyncConfiguration(bool enabled, string? directory)
+    {
+        lock (_todoGate)
+        {
+            using var connection = OpenConnection();
+            using var transaction = connection.BeginTransaction();
+            SetMetadata(connection, transaction, "todo_sync_enabled", enabled ? "1" : "0");
+            if (string.IsNullOrWhiteSpace(directory)) DeleteMetadata(connection, transaction, "todo_sync_directory");
+            else SetMetadata(connection, transaction, "todo_sync_directory", Path.GetFullPath(directory));
+            transaction.Commit();
+        }
+    }
 
     public IReadOnlyList<ClipboardItem> GetClipboardItems()
     {
@@ -369,6 +558,187 @@ public sealed class DesktopPetRepository(string databasePath)
         LaunchersChanged?.Invoke(this, EventArgs.Empty);
     }
 
+    private static void EnsureTodoSyncSchema(SqliteConnection connection)
+    {
+        EnsureColumn(connection, "todos", "sync_id", "TEXT NULL");
+        EnsureColumn(connection, "todos", "deleted_at", "TEXT NULL");
+
+        using var transaction = connection.BeginTransaction();
+        var deviceId = GetDeviceId(connection, transaction);
+        var legacyTodos = new List<(long Id, string Title, bool IsCompleted, DateTimeOffset CreatedAt)>();
+        using (var readCommand = connection.CreateCommand())
+        {
+            readCommand.Transaction = transaction;
+            readCommand.CommandText = "SELECT id, title, is_completed, created_at FROM todos WHERE sync_id IS NULL OR sync_id = '';";
+            using var reader = readCommand.ExecuteReader();
+            while (reader.Read())
+            {
+                var createdAt = DateTimeOffset.TryParse(reader.GetString(3), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var parsed)
+                    ? parsed
+                    : DateTimeOffset.UtcNow;
+                legacyTodos.Add((reader.GetInt64(0), reader.GetString(1), reader.GetBoolean(2), createdAt));
+            }
+        }
+
+        foreach (var legacy in legacyTodos)
+        {
+            var itemId = Guid.NewGuid();
+            using var updateCommand = connection.CreateCommand();
+            updateCommand.Transaction = transaction;
+            updateCommand.CommandText = "UPDATE todos SET sync_id = $syncId WHERE id = $id;";
+            updateCommand.Parameters.AddWithValue("$syncId", itemId.ToString("D"));
+            updateCommand.Parameters.AddWithValue("$id", legacy.Id);
+            updateCommand.ExecuteNonQuery();
+            InsertTodoOperation(connection, transaction, new TodoSyncOperation(
+                Guid.NewGuid(), itemId, deviceId, NextTodoClock(connection, transaction), TodoSyncOperationKinds.Add,
+                legacy.Title, legacy.IsCompleted, legacy.CreatedAt));
+        }
+
+        using (var indexCommand = connection.CreateCommand())
+        {
+            indexCommand.Transaction = transaction;
+            indexCommand.CommandText = "CREATE UNIQUE INDEX IF NOT EXISTS idx_todos_sync_id ON todos(sync_id);";
+            indexCommand.ExecuteNonQuery();
+        }
+
+        using (var versionCommand = connection.CreateCommand())
+        {
+            versionCommand.Transaction = transaction;
+            versionCommand.CommandText = "PRAGMA user_version;";
+            var version = Convert.ToInt32(versionCommand.ExecuteScalar());
+            if (version < CurrentSchemaVersion)
+            {
+                versionCommand.CommandText = $"PRAGMA user_version = {CurrentSchemaVersion};";
+                versionCommand.ExecuteNonQuery();
+            }
+        }
+        transaction.Commit();
+    }
+
+    private static void EnsureColumn(SqliteConnection connection, string table, string column, string declaration)
+    {
+        using var schemaCommand = connection.CreateCommand();
+        schemaCommand.CommandText = $"SELECT COUNT(*) FROM pragma_table_info('{table}') WHERE name = $column;";
+        schemaCommand.Parameters.AddWithValue("$column", column);
+        if (Convert.ToInt32(schemaCommand.ExecuteScalar()) != 0) return;
+        using var alterCommand = connection.CreateCommand();
+        alterCommand.CommandText = $"ALTER TABLE {table} ADD COLUMN {column} {declaration};";
+        alterCommand.ExecuteNonQuery();
+    }
+
+    private static Guid GetDeviceId(SqliteConnection connection, SqliteTransaction transaction)
+    {
+        var existing = GetMetadata(connection, transaction, "todo_sync_device_id");
+        if (Guid.TryParse(existing, out var deviceId) && deviceId != Guid.Empty) return deviceId;
+        deviceId = Guid.NewGuid();
+        SetMetadata(connection, transaction, "todo_sync_device_id", deviceId.ToString("D"));
+        return deviceId;
+    }
+
+    private static long NextTodoClock(SqliteConnection connection, SqliteTransaction transaction)
+    {
+        var next = checked(GetMetadataLong(connection, transaction, "todo_sync_clock") + 1);
+        SetMetadata(connection, transaction, "todo_sync_clock", next.ToString(CultureInfo.InvariantCulture));
+        return next;
+    }
+
+    private static long GetMetadataLong(SqliteConnection connection, SqliteTransaction transaction, string key) =>
+        long.TryParse(GetMetadata(connection, transaction, key), NumberStyles.Integer, CultureInfo.InvariantCulture, out var value) ? value : 0;
+
+    private static string? GetMetadata(SqliteConnection connection, SqliteTransaction transaction, string key)
+    {
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = "SELECT value FROM sync_metadata WHERE key = $key;";
+        command.Parameters.AddWithValue("$key", key);
+        return command.ExecuteScalar() as string;
+    }
+
+    private static void SetMetadata(SqliteConnection connection, SqliteTransaction transaction, string key, string value)
+    {
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = "INSERT INTO sync_metadata (key, value) VALUES ($key, $value) ON CONFLICT(key) DO UPDATE SET value = excluded.value;";
+        command.Parameters.AddWithValue("$key", key);
+        command.Parameters.AddWithValue("$value", value);
+        command.ExecuteNonQuery();
+    }
+
+    private static void DeleteMetadata(SqliteConnection connection, SqliteTransaction transaction, string key)
+    {
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = "DELETE FROM sync_metadata WHERE key = $key;";
+        command.Parameters.AddWithValue("$key", key);
+        command.ExecuteNonQuery();
+    }
+
+    private static int InsertTodoOperation(SqliteConnection connection, SqliteTransaction transaction, TodoSyncOperation operation, bool ignoreExisting = false)
+    {
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = $"""
+            INSERT {(ignoreExisting ? "OR IGNORE " : string.Empty)}INTO todo_sync_operations
+              (operation_id, item_sync_id, device_id, counter, kind, title, is_completed, created_at)
+            VALUES ($operationId, $itemId, $deviceId, $counter, $kind, $title, $completed, $createdAt);
+            """;
+        command.Parameters.AddWithValue("$operationId", operation.OperationId.ToString("D"));
+        command.Parameters.AddWithValue("$itemId", operation.ItemId.ToString("D"));
+        command.Parameters.AddWithValue("$deviceId", operation.DeviceId.ToString("D"));
+        command.Parameters.AddWithValue("$counter", operation.Counter);
+        command.Parameters.AddWithValue("$kind", operation.Kind);
+        command.Parameters.AddWithValue("$title", (object?)operation.Title ?? DBNull.Value);
+        command.Parameters.AddWithValue("$completed", operation.IsCompleted is null ? DBNull.Value : operation.IsCompleted.Value);
+        command.Parameters.AddWithValue("$createdAt", operation.CreatedAtUtc.ToString("O"));
+        return command.ExecuteNonQuery();
+    }
+
+    private static void RebuildTodosFromOperations(SqliteConnection connection, SqliteTransaction transaction)
+    {
+        var operations = new List<TodoSyncOperation>();
+        using (var readCommand = connection.CreateCommand())
+        {
+            readCommand.Transaction = transaction;
+            readCommand.CommandText = "SELECT operation_id, item_sync_id, device_id, counter, kind, title, is_completed, created_at FROM todo_sync_operations;";
+            using var reader = readCommand.ExecuteReader();
+            while (reader.Read())
+            {
+                if (!Guid.TryParse(reader.GetString(0), out var operationId) ||
+                    !Guid.TryParse(reader.GetString(1), out var itemId) ||
+                    !Guid.TryParse(reader.GetString(2), out var deviceId) ||
+                    !DateTimeOffset.TryParse(reader.GetString(7), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var createdAt))
+                    continue;
+                operations.Add(new TodoSyncOperation(operationId, itemId, deviceId, reader.GetInt64(3), reader.GetString(4),
+                    reader.IsDBNull(5) ? null : reader.GetString(5), reader.IsDBNull(6) ? null : reader.GetBoolean(6), createdAt));
+            }
+        }
+
+        using (var clearCommand = connection.CreateCommand())
+        {
+            clearCommand.Transaction = transaction;
+            clearCommand.CommandText = "DELETE FROM todos;";
+            clearCommand.ExecuteNonQuery();
+        }
+
+        using var insertCommand = connection.CreateCommand();
+        insertCommand.Transaction = transaction;
+        insertCommand.CommandText = "INSERT INTO todos (sync_id, title, is_completed, created_at, deleted_at) VALUES ($id, $title, $completed, $createdAt, $deletedAt);";
+        var idParameter = insertCommand.Parameters.Add("$id", SqliteType.Text);
+        var titleParameter = insertCommand.Parameters.Add("$title", SqliteType.Text);
+        var completedParameter = insertCommand.Parameters.Add("$completed", SqliteType.Integer);
+        var createdAtParameter = insertCommand.Parameters.Add("$createdAt", SqliteType.Text);
+        var deletedAtParameter = insertCommand.Parameters.Add("$deletedAt", SqliteType.Text);
+        foreach (var item in TodoMergeEngine.Materialize(operations))
+        {
+            idParameter.Value = item.ItemId.ToString("D");
+            titleParameter.Value = item.Title;
+            completedParameter.Value = item.IsCompleted;
+            createdAtParameter.Value = item.CreatedAtUtc.ToString("O");
+            deletedAtParameter.Value = item.DeletedAtUtc is null ? DBNull.Value : item.DeletedAtUtc.Value.ToString("O");
+            insertCommand.ExecuteNonQuery();
+        }
+    }
+
     private SqliteConnection OpenConnection()
     {
         var connection = new SqliteConnection(_connectionString);
@@ -386,7 +756,7 @@ public sealed class DesktopPetRepository(string databasePath)
     }
 }
 
-public sealed record TodoItem(long Id, string Title, bool IsCompleted);
+public sealed record TodoItem(Guid Id, string Title, bool IsCompleted);
 public sealed record ClipboardItem(long Id, string Content);
 public sealed record LauncherItem(long Id, string Name, string TargetPath);
 

@@ -1,6 +1,8 @@
 using DesktopPet.Core;
+using DesktopPet.Core.Sync;
 using DesktopPet.Data;
 using Microsoft.Win32;
+using System.Diagnostics;
 using System.Windows;
 using System.Windows.Input;
 using Forms = System.Windows.Forms;
@@ -11,6 +13,7 @@ public partial class SettingsWindow : Window
 {
     private readonly MainWindow _pet;
     private readonly DesktopPetRepository _repository;
+    private readonly TodoFileSyncService _todoSyncService;
     private readonly LauncherDragDrop _launcherDragDrop;
     private readonly Func<HotkeyGesture?, bool> _setVisibilityHotkey;
     private readonly Func<HotkeyGesture?, bool> _setKeyboardStatisticsHotkey;
@@ -20,6 +23,7 @@ public partial class SettingsWindow : Window
     public SettingsWindow(
         MainWindow pet,
         DesktopPetRepository repository,
+        TodoFileSyncService todoSyncService,
         Func<HotkeyGesture?, bool> setVisibilityHotkey,
         Func<HotkeyGesture?, bool> setKeyboardStatisticsHotkey,
         Func<HotkeyGesture?, bool> setMouseStatisticsHotkey)
@@ -28,12 +32,18 @@ public partial class SettingsWindow : Window
         SourceInitialized += (_, _) => WindowAppearance.EnableRoundedCorners(this);
         _pet = pet;
         _repository = repository;
+        _todoSyncService = todoSyncService;
         _setVisibilityHotkey = setVisibilityHotkey;
         _setKeyboardStatisticsHotkey = setKeyboardStatisticsHotkey;
         _setMouseStatisticsHotkey = setMouseStatisticsHotkey;
         _launcherDragDrop = new LauncherDragDrop(LauncherList, repository);
         _repository.LaunchersChanged += RepositoryLaunchersChanged;
-        Closed += (_, _) => _repository.LaunchersChanged -= RepositoryLaunchersChanged;
+        _todoSyncService.StateChanged += TodoSyncStateChanged;
+        Closed += (_, _) =>
+        {
+            _repository.LaunchersChanged -= RepositoryLaunchersChanged;
+            _todoSyncService.StateChanged -= TodoSyncStateChanged;
+        };
         _isLoading = true;
         TopmostCheckBox.IsChecked = pet.IsPetTopmost;
         VisibilityHotkeyBox.Text = pet.ToggleVisibilityHotkey?.DisplayText ?? "未设置";
@@ -41,6 +51,7 @@ public partial class SettingsWindow : Window
         MouseStatisticsHotkeyBox.Text = pet.MouseStatisticsHotkey?.DisplayText ?? "未设置";
         _isLoading = false;
         RefreshLaunchers();
+        RefreshTodoSyncState(_todoSyncService.CurrentState);
     }
 
     private void TopmostChanged(object sender, RoutedEventArgs e)
@@ -174,6 +185,54 @@ public partial class SettingsWindow : Window
     private void RefreshLaunchers() => LauncherList.ItemsSource = _repository.GetLaunchers();
 
     private void RepositoryLaunchersChanged(object? sender, EventArgs e) => RefreshLaunchers();
+    private void TodoSyncStateChanged(object? sender, TodoSyncState state) => Dispatcher.BeginInvoke(() => RefreshTodoSyncState(state));
+
+    private void RefreshTodoSyncState(TodoSyncState state)
+    {
+        var configuration = _repository.GetTodoSyncConfiguration();
+        TodoSyncDirectoryBox.Text = state.Directory ?? configuration.Directory ?? "尚未选择";
+        TodoSyncStatusText.Text = state.Message;
+        TodoSyncLastTimeText.Text = state.LastSuccessfulMergeUtc is null
+            ? "尚无成功合并记录"
+            : $"上次本地合并：{state.LastSuccessfulMergeUtc.Value.ToLocalTime():yyyy-MM-dd HH:mm:ss}";
+        EnableTodoSyncButton.IsEnabled = !configuration.Enabled;
+        SyncTodosNowButton.IsEnabled = configuration.Enabled;
+        DisableTodoSyncButton.IsEnabled = configuration.Enabled;
+        OpenTodoSyncDirectoryButton.IsEnabled = !string.IsNullOrWhiteSpace(configuration.Directory) && Directory.Exists(configuration.Directory);
+    }
+
+    private async void EnableTodoSync(object sender, RoutedEventArgs e)
+    {
+        if (!await _todoSyncService.EnableDefaultAsync())
+            MessageBox.Show("没有找到可用的主要 OneDrive 目录，请点击“选择其他目录”并选择一个由 OneDrive 同步的文件夹。", "DesktopPet");
+    }
+
+    private async void ChooseTodoSyncDirectory(object sender, RoutedEventArgs e)
+    {
+        var configuration = _repository.GetTodoSyncConfiguration();
+        using var dialog = new Forms.FolderBrowserDialog
+        {
+            Description = "选择一个由 OneDrive 同步的文件夹，用于保存 DesktopPet 待办副本。",
+            UseDescriptionForTitle = true,
+            ShowNewFolderButton = true,
+            SelectedPath = configuration.Directory ?? string.Empty
+        };
+        if (dialog.ShowDialog() != Forms.DialogResult.OK) return;
+        if (!await _todoSyncService.ConfigureDirectoryAsync(dialog.SelectedPath))
+            MessageBox.Show("无法使用所选目录，请确认目录存在且当前用户具有写入权限。", "DesktopPet");
+    }
+
+    private async void SyncTodosNow(object sender, RoutedEventArgs e) => await _todoSyncService.SynchronizeAsync();
+
+    private void OpenTodoSyncDirectory(object sender, RoutedEventArgs e)
+    {
+        var directory = _repository.GetTodoSyncConfiguration().Directory;
+        if (string.IsNullOrWhiteSpace(directory) || !Directory.Exists(directory)) return;
+        Process.Start(new ProcessStartInfo { FileName = directory, UseShellExecute = true });
+    }
+
+    private void DisableTodoSync(object sender, RoutedEventArgs e) => _todoSyncService.Disable();
+
     private void LauncherPreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e) => _launcherDragDrop.PreviewMouseLeftButtonDown(e);
     private void LauncherPreviewMouseMove(object sender, MouseEventArgs e) => _launcherDragDrop.PreviewMouseMove(e);
     private void LauncherDrop(object sender, DragEventArgs e) => _launcherDragDrop.Drop(e);
