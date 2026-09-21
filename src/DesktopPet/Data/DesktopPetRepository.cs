@@ -1,17 +1,20 @@
 using DesktopPet.Core.Sync;
 using Microsoft.Data.Sqlite;
 using System.Globalization;
+using System.Text.Json;
 
 namespace DesktopPet.Data;
 
 public sealed class DesktopPetRepository(string databasePath)
 {
     private const int MouseGridSchemaVersion = 1;
-    private const int CurrentSchemaVersion = 2;
+    private const int CurrentSchemaVersion = 3;
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
     private readonly string _connectionString = new SqliteConnectionStringBuilder { DataSource = databasePath }.ToString();
     private readonly object _todoGate = new();
     public event EventHandler? TodosChanged;
+    public event EventHandler? NotesChanged;
     public event EventHandler? LaunchersChanged;
 
     public void Initialize()
@@ -81,6 +84,19 @@ public sealed class DesktopPetRepository(string databasePath)
               created_at TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_todo_sync_operations_item ON todo_sync_operations(item_sync_id);
+            CREATE TABLE IF NOT EXISTS notes (
+              sync_id TEXT PRIMARY KEY,
+              content TEXT NOT NULL,
+              is_conflict INTEGER NOT NULL DEFAULT 0,
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL,
+              deleted_at TEXT NULL,
+              revision_id TEXT NOT NULL,
+              version_device_id TEXT NOT NULL,
+              version_counter INTEGER NOT NULL,
+              version_vector TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_notes_updated_at ON notes(updated_at DESC);
             """;
         command.ExecuteNonQuery();
 
@@ -277,9 +293,10 @@ public sealed class DesktopPetRepository(string databasePath)
         {
             using var connection = OpenConnection();
             using var transaction = connection.BeginTransaction();
+            MigrateSyncConfiguration(connection, transaction);
             var configuration = new TodoSyncConfiguration(
-                string.Equals(GetMetadata(connection, transaction, "todo_sync_enabled"), "1", StringComparison.Ordinal),
-                GetMetadata(connection, transaction, "todo_sync_directory"),
+                string.Equals(GetMetadata(connection, transaction, "sync_enabled"), "1", StringComparison.Ordinal),
+                GetMetadata(connection, transaction, "sync_directory"),
                 GetDeviceId(connection, transaction));
             transaction.Commit();
             return configuration;
@@ -292,11 +309,163 @@ public sealed class DesktopPetRepository(string databasePath)
         {
             using var connection = OpenConnection();
             using var transaction = connection.BeginTransaction();
+            SetMetadata(connection, transaction, "sync_enabled", enabled ? "1" : "0");
             SetMetadata(connection, transaction, "todo_sync_enabled", enabled ? "1" : "0");
-            if (string.IsNullOrWhiteSpace(directory)) DeleteMetadata(connection, transaction, "todo_sync_directory");
-            else SetMetadata(connection, transaction, "todo_sync_directory", Path.GetFullPath(directory));
+            if (string.IsNullOrWhiteSpace(directory))
+            {
+                DeleteMetadata(connection, transaction, "sync_directory");
+            }
+            else
+            {
+                var root = Path.GetFullPath(directory);
+                SetMetadata(connection, transaction, "sync_directory", root);
+                SetMetadata(connection, transaction, "todo_sync_directory", Path.Combine(root, "TodoSync"));
+                DeleteMetadata(connection, transaction, "sync_legacy_directory");
+            }
             transaction.Commit();
         }
+    }
+
+    public string? GetLegacySyncDirectory()
+    {
+        lock (_todoGate)
+        {
+            using var connection = OpenConnection();
+            using var transaction = connection.BeginTransaction();
+            MigrateSyncConfiguration(connection, transaction);
+            var value = GetMetadata(connection, transaction, "sync_legacy_directory");
+            transaction.Commit();
+            return value;
+        }
+    }
+
+    public IReadOnlyList<NoteItem> GetNotes()
+    {
+        lock (_todoGate)
+        {
+            using var connection = OpenConnection();
+            return ReadNoteRecords(connection)
+                .Where(note => note.DeletedAtUtc is null)
+                .OrderByDescending(note => note.UpdatedAtUtc)
+                .ThenBy(note => note.NoteId)
+                .Select(ToNoteItem)
+                .ToArray();
+        }
+    }
+
+    public NoteItem AddNote(string content)
+    {
+        if (string.IsNullOrWhiteSpace(content)) throw new ArgumentException("便签内容不能为空。", nameof(content));
+        ValidateNoteContent(content);
+        NoteSyncRecord record;
+        lock (_todoGate)
+        {
+            using var connection = OpenConnection();
+            using var transaction = connection.BeginTransaction();
+            var deviceId = GetDeviceId(connection, transaction);
+            var counter = NextTodoClock(connection, transaction);
+            var now = DateTimeOffset.UtcNow;
+            record = new NoteSyncRecord(
+                Guid.NewGuid(), content, false, now, now, null,
+                new NoteVersion(Guid.NewGuid(), deviceId, counter),
+                new Dictionary<string, long>(StringComparer.Ordinal) { [deviceId.ToString("D")] = counter });
+            UpsertNoteRecords(connection, transaction, [record]);
+            transaction.Commit();
+        }
+        NotesChanged?.Invoke(this, EventArgs.Empty);
+        return ToNoteItem(record);
+    }
+
+    public NoteItem UpdateNote(NoteItem basis, string content)
+    {
+        ValidateNoteContent(content);
+        NoteSyncRecord saved;
+        lock (_todoGate)
+        {
+            using var connection = OpenConnection();
+            using var transaction = connection.BeginTransaction();
+            var deviceId = GetDeviceId(connection, transaction);
+            var counter = NextTodoClock(connection, transaction);
+            var vector = new Dictionary<string, long>(basis.VersionVector, StringComparer.Ordinal)
+            {
+                [deviceId.ToString("D")] = counter
+            };
+            var candidate = new NoteSyncRecord(
+                basis.Id, content, basis.IsConflict, basis.CreatedAtUtc, DateTimeOffset.UtcNow, null,
+                new NoteVersion(Guid.NewGuid(), deviceId, counter), vector);
+            var merged = NoteMergeEngine.Merge(ReadNoteRecords(connection, transaction), [candidate]);
+            UpsertNoteRecords(connection, transaction, merged);
+            saved = merged.FirstOrDefault(note => note.NoteId == basis.Id && note.Version.RevisionId == candidate.Version.RevisionId)
+                ?? merged.FirstOrDefault(note => note.NoteId == NoteMergeEngine.ConflictNoteId(basis.Id, candidate.Version.RevisionId))
+                ?? candidate;
+            transaction.Commit();
+        }
+        NotesChanged?.Invoke(this, EventArgs.Empty);
+        return ToNoteItem(saved);
+    }
+
+    public void DeleteNote(NoteItem basis)
+    {
+        lock (_todoGate)
+        {
+            using var connection = OpenConnection();
+            using var transaction = connection.BeginTransaction();
+            var deviceId = GetDeviceId(connection, transaction);
+            var counter = NextTodoClock(connection, transaction);
+            var vector = new Dictionary<string, long>(basis.VersionVector, StringComparer.Ordinal)
+            {
+                [deviceId.ToString("D")] = counter
+            };
+            var now = DateTimeOffset.UtcNow;
+            var deletion = new NoteSyncRecord(
+                basis.Id, basis.Content, basis.IsConflict, basis.CreatedAtUtc, now, now,
+                new NoteVersion(Guid.NewGuid(), deviceId, counter), vector);
+            var merged = NoteMergeEngine.Merge(ReadNoteRecords(connection, transaction), [deletion]);
+            UpsertNoteRecords(connection, transaction, merged);
+            transaction.Commit();
+        }
+        NotesChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    public IReadOnlyList<NoteSyncRecord> GetNoteSyncRecords()
+    {
+        lock (_todoGate)
+        {
+            using var connection = OpenConnection();
+            return ReadNoteRecords(connection).OrderBy(note => note.NoteId).ToArray();
+        }
+    }
+
+    public int MergeNoteSyncRecords(IEnumerable<NoteSyncRecord> incomingRecords)
+    {
+        var incoming = incomingRecords.Where(NoteMergeEngine.IsValid).ToArray();
+        if (incoming.Length == 0) return 0;
+        var changed = 0;
+        lock (_todoGate)
+        {
+            using var connection = OpenConnection();
+            using var transaction = connection.BeginTransaction();
+            var existing = ReadNoteRecords(connection, transaction);
+            var before = NoteFingerprint(existing);
+            var merged = NoteMergeEngine.Merge(existing, incoming);
+            var after = NoteFingerprint(merged);
+            if (!string.Equals(before, after, StringComparison.Ordinal))
+            {
+                UpsertNoteRecords(connection, transaction, merged);
+                changed = 1;
+            }
+
+            var observedCounter = incoming.SelectMany(note => note.VersionVector.Values).DefaultIfEmpty(0).Max();
+            var currentCounter = GetMetadataLong(connection, transaction, "sync_clock");
+            if (observedCounter > currentCounter)
+            {
+                SetMetadata(connection, transaction, "sync_clock", observedCounter.ToString(CultureInfo.InvariantCulture));
+                SetMetadata(connection, transaction, "todo_sync_clock", observedCounter.ToString(CultureInfo.InvariantCulture));
+            }
+            transaction.Commit();
+        }
+        if (changed > 0) NotesChanged?.Invoke(this, EventArgs.Empty);
+        return changed;
     }
 
     public IReadOnlyList<ClipboardItem> GetClipboardItems()
@@ -639,19 +808,172 @@ public void RenameLauncher(long id, string name)
 
     private static Guid GetDeviceId(SqliteConnection connection, SqliteTransaction transaction)
     {
-        var existing = GetMetadata(connection, transaction, "todo_sync_device_id");
-        if (Guid.TryParse(existing, out var deviceId) && deviceId != Guid.Empty) return deviceId;
+        var existing = GetMetadata(connection, transaction, "sync_device_id") ??
+                       GetMetadata(connection, transaction, "todo_sync_device_id");
+        if (Guid.TryParse(existing, out var deviceId) && deviceId != Guid.Empty)
+        {
+            SetMetadata(connection, transaction, "sync_device_id", deviceId.ToString("D"));
+            SetMetadata(connection, transaction, "todo_sync_device_id", deviceId.ToString("D"));
+            return deviceId;
+        }
         deviceId = Guid.NewGuid();
+        SetMetadata(connection, transaction, "sync_device_id", deviceId.ToString("D"));
         SetMetadata(connection, transaction, "todo_sync_device_id", deviceId.ToString("D"));
         return deviceId;
     }
 
     private static long NextTodoClock(SqliteConnection connection, SqliteTransaction transaction)
     {
-        var next = checked(GetMetadataLong(connection, transaction, "todo_sync_clock") + 1);
+        var current = Math.Max(
+            GetMetadataLong(connection, transaction, "sync_clock"),
+            GetMetadataLong(connection, transaction, "todo_sync_clock"));
+        var next = checked(current + 1);
+        SetMetadata(connection, transaction, "sync_clock", next.ToString(CultureInfo.InvariantCulture));
         SetMetadata(connection, transaction, "todo_sync_clock", next.ToString(CultureInfo.InvariantCulture));
         return next;
     }
+
+    private static void MigrateSyncConfiguration(SqliteConnection connection, SqliteTransaction transaction)
+    {
+        if (GetMetadata(connection, transaction, "sync_directory") is not null ||
+            GetMetadata(connection, transaction, "sync_legacy_directory") is not null)
+            return;
+
+        var legacyDirectory = GetMetadata(connection, transaction, "todo_sync_directory");
+        if (string.IsNullOrWhiteSpace(legacyDirectory)) return;
+        var fullPath = Path.GetFullPath(legacyDirectory).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        if (string.Equals(Path.GetFileName(fullPath), "TodoSync", StringComparison.OrdinalIgnoreCase) &&
+            Directory.GetParent(fullPath) is { } parent)
+        {
+            SetMetadata(connection, transaction, "sync_directory", parent.FullName);
+            SetMetadata(connection, transaction, "sync_enabled",
+                string.Equals(GetMetadata(connection, transaction, "todo_sync_enabled"), "1", StringComparison.Ordinal) ? "1" : "0");
+        }
+        else
+        {
+            SetMetadata(connection, transaction, "sync_legacy_directory", fullPath);
+            SetMetadata(connection, transaction, "sync_enabled", "0");
+        }
+    }
+
+    private static void ValidateNoteContent(string content)
+    {
+        if (content.Length > NoteMergeEngine.MaximumContentLength)
+            throw new ArgumentOutOfRangeException(nameof(content), $"便签最多允许 {NoteMergeEngine.MaximumContentLength} 个字符。");
+    }
+
+    private static IReadOnlyList<NoteSyncRecord> ReadNoteRecords(
+        SqliteConnection connection,
+        SqliteTransaction? transaction = null)
+    {
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            SELECT sync_id, content, is_conflict, created_at, updated_at, deleted_at,
+                   revision_id, version_device_id, version_counter, version_vector
+            FROM notes;
+            """;
+        using var reader = command.ExecuteReader();
+        var results = new List<NoteSyncRecord>();
+        while (reader.Read())
+        {
+            if (!Guid.TryParse(reader.GetString(0), out var noteId) ||
+                !DateTimeOffset.TryParse(reader.GetString(3), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var createdAt) ||
+                !DateTimeOffset.TryParse(reader.GetString(4), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var updatedAt) ||
+                !Guid.TryParse(reader.GetString(6), out var revisionId) ||
+                !Guid.TryParse(reader.GetString(7), out var deviceId))
+                continue;
+
+            DateTimeOffset? deletedAt = null;
+            if (!reader.IsDBNull(5) && DateTimeOffset.TryParse(reader.GetString(5), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var parsedDeletedAt))
+                deletedAt = parsedDeletedAt;
+            Dictionary<string, long>? vector;
+            try { vector = JsonSerializer.Deserialize<Dictionary<string, long>>(reader.GetString(9), JsonOptions); }
+            catch (JsonException) { continue; }
+            if (vector is null) continue;
+            var record = new NoteSyncRecord(
+                noteId, reader.GetString(1), reader.GetBoolean(2), createdAt, updatedAt, deletedAt,
+                new NoteVersion(revisionId, deviceId, reader.GetInt64(8)), vector);
+            if (NoteMergeEngine.IsValid(record)) results.Add(record);
+        }
+        return results;
+    }
+
+    private static void UpsertNoteRecords(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        IEnumerable<NoteSyncRecord> records)
+    {
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            INSERT INTO notes
+              (sync_id, content, is_conflict, created_at, updated_at, deleted_at,
+               revision_id, version_device_id, version_counter, version_vector)
+            VALUES
+              ($id, $content, $conflict, $createdAt, $updatedAt, $deletedAt,
+               $revisionId, $deviceId, $counter, $vector)
+            ON CONFLICT(sync_id) DO UPDATE SET
+              content = excluded.content,
+              is_conflict = excluded.is_conflict,
+              created_at = excluded.created_at,
+              updated_at = excluded.updated_at,
+              deleted_at = excluded.deleted_at,
+              revision_id = excluded.revision_id,
+              version_device_id = excluded.version_device_id,
+              version_counter = excluded.version_counter,
+              version_vector = excluded.version_vector;
+            """;
+        var id = command.Parameters.Add("$id", SqliteType.Text);
+        var content = command.Parameters.Add("$content", SqliteType.Text);
+        var conflict = command.Parameters.Add("$conflict", SqliteType.Integer);
+        var createdAt = command.Parameters.Add("$createdAt", SqliteType.Text);
+        var updatedAt = command.Parameters.Add("$updatedAt", SqliteType.Text);
+        var deletedAt = command.Parameters.Add("$deletedAt", SqliteType.Text);
+        var revisionId = command.Parameters.Add("$revisionId", SqliteType.Text);
+        var deviceId = command.Parameters.Add("$deviceId", SqliteType.Text);
+        var counter = command.Parameters.Add("$counter", SqliteType.Integer);
+        var vector = command.Parameters.Add("$vector", SqliteType.Text);
+        foreach (var record in records)
+        {
+            id.Value = record.NoteId.ToString("D");
+            content.Value = record.Content;
+            conflict.Value = record.IsConflict;
+            createdAt.Value = record.CreatedAtUtc.ToString("O");
+            updatedAt.Value = record.UpdatedAtUtc.ToString("O");
+            deletedAt.Value = record.DeletedAtUtc is null ? DBNull.Value : record.DeletedAtUtc.Value.ToString("O");
+            revisionId.Value = record.Version.RevisionId.ToString("D");
+            deviceId.Value = record.Version.DeviceId.ToString("D");
+            counter.Value = record.Version.Counter;
+            vector.Value = JsonSerializer.Serialize(
+                record.VersionVector.OrderBy(pair => pair.Key, StringComparer.Ordinal)
+                    .ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal),
+                JsonOptions);
+            command.ExecuteNonQuery();
+        }
+    }
+
+    private static string NoteFingerprint(IEnumerable<NoteSyncRecord> notes) =>
+        JsonSerializer.Serialize(notes.OrderBy(note => note.NoteId).Select(note => new
+        {
+            note.NoteId,
+            note.Content,
+            note.IsConflict,
+            note.CreatedAtUtc,
+            note.UpdatedAtUtc,
+            note.DeletedAtUtc,
+            note.Version,
+            VersionVector = note.VersionVector.OrderBy(pair => pair.Key, StringComparer.Ordinal).ToArray()
+        }), JsonOptions);
+
+    private static NoteItem ToNoteItem(NoteSyncRecord note) => new(
+        note.NoteId,
+        note.Content,
+        note.IsConflict,
+        note.CreatedAtUtc,
+        note.UpdatedAtUtc,
+        note.Version,
+        new Dictionary<string, long>(note.VersionVector, StringComparer.Ordinal));
 
     private static long GetMetadataLong(SqliteConnection connection, SqliteTransaction transaction, string key) =>
         long.TryParse(GetMetadata(connection, transaction, key), NumberStyles.Integer, CultureInfo.InvariantCulture, out var value) ? value : 0;
@@ -769,6 +1091,18 @@ public void RenameLauncher(long id, string name)
 
 public sealed record TodoItem(Guid Id, string Title, bool IsCompleted);
 public sealed record ClipboardItem(long Id, string Content);
+public sealed record NoteItem(
+    Guid Id,
+    string Content,
+    bool IsConflict,
+    DateTimeOffset CreatedAtUtc,
+    DateTimeOffset UpdatedAtUtc,
+    NoteVersion Version,
+    Dictionary<string, long> VersionVector)
+{
+    public string Preview => string.IsNullOrEmpty(Content) ? "（空便签）" : Content;
+    public string UpdatedAtText => UpdatedAtUtc.ToLocalTime().ToString("MM-dd HH:mm");
+}
 
 public sealed class LauncherItem(long id, string name, string targetPath) : System.ComponentModel.INotifyPropertyChanged
 {

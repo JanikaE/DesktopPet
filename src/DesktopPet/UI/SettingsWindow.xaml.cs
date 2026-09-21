@@ -15,7 +15,7 @@ public partial class SettingsWindow : Window
 {
     private readonly MainWindow _pet;
     private readonly DesktopPetRepository _repository;
-    private readonly TodoFileSyncService _todoSyncService;
+    private readonly OneDriveSyncService _oneDriveSyncService;
     private readonly LauncherDragDrop _launcherDragDrop;
     private readonly Func<HotkeyGesture?, bool> _setVisibilityHotkey;
     private readonly Func<HotkeyGesture?, bool> _setKeyboardStatisticsHotkey;
@@ -26,7 +26,7 @@ public partial class SettingsWindow : Window
     public SettingsWindow(
         MainWindow pet,
         DesktopPetRepository repository,
-        TodoFileSyncService todoSyncService,
+        OneDriveSyncService oneDriveSyncService,
         Func<HotkeyGesture?, bool> setVisibilityHotkey,
         Func<HotkeyGesture?, bool> setKeyboardStatisticsHotkey,
         Func<HotkeyGesture?, bool> setMouseStatisticsHotkey)
@@ -43,17 +43,17 @@ public partial class SettingsWindow : Window
         };
         _pet = pet;
         _repository = repository;
-        _todoSyncService = todoSyncService;
+        _oneDriveSyncService = oneDriveSyncService;
         _setVisibilityHotkey = setVisibilityHotkey;
         _setKeyboardStatisticsHotkey = setKeyboardStatisticsHotkey;
         _setMouseStatisticsHotkey = setMouseStatisticsHotkey;
         _launcherDragDrop = new LauncherDragDrop(LauncherList, repository);
         _repository.LaunchersChanged += RepositoryLaunchersChanged;
-        _todoSyncService.StateChanged += TodoSyncStateChanged;
+        _oneDriveSyncService.StateChanged += TodoSyncStateChanged;
         Closed += (_, _) =>
         {
             _repository.LaunchersChanged -= RepositoryLaunchersChanged;
-            _todoSyncService.StateChanged -= TodoSyncStateChanged;
+            _oneDriveSyncService.StateChanged -= TodoSyncStateChanged;
         };
         _isLoading = true;
         TopmostCheckBox.IsChecked = pet.IsPetTopmost;
@@ -62,7 +62,7 @@ public partial class SettingsWindow : Window
         MouseStatisticsHotkeyBox.Text = pet.MouseStatisticsHotkey?.DisplayText ?? "未设置";
         _isLoading = false;
         RefreshLaunchers();
-        RefreshTodoSyncState(_todoSyncService.CurrentState);
+        RefreshTodoSyncState(_oneDriveSyncService.CurrentState);
     }
 
     private void TopmostChanged(object sender, RoutedEventArgs e)
@@ -290,8 +290,8 @@ public partial class SettingsWindow : Window
 
     private async void EnableTodoSync(object sender, RoutedEventArgs e)
     {
-        if (!await _todoSyncService.EnableDefaultAsync())
-            MessageBox.Show("没有找到可用的主要 OneDrive 目录，请点击“选择其他目录”并选择一个由 OneDrive 同步的文件夹。", "DesktopPet");
+        if (!await _oneDriveSyncService.EnableDefaultAsync())
+            MessageBox.Show("没有找到可用的主要 OneDrive 目录，请点击“选择其他目录”并选择 TodoSync 的上一级同步根目录。", "DesktopPet");
     }
 
     private async void ChooseTodoSyncDirectory(object sender, RoutedEventArgs e)
@@ -299,17 +299,17 @@ public partial class SettingsWindow : Window
         var configuration = _repository.GetTodoSyncConfiguration();
         using var dialog = new Forms.FolderBrowserDialog
         {
-            Description = "选择一个由 OneDrive 同步的文件夹，用于保存 DesktopPet 待办副本。",
+            Description = "选择一个由 OneDrive 同步的根目录；程序会在其中创建 TodoSync 和 NoteSync。",
             UseDescriptionForTitle = true,
             ShowNewFolderButton = true,
             SelectedPath = configuration.Directory ?? string.Empty
         };
         if (dialog.ShowDialog() != Forms.DialogResult.OK) return;
-        if (!await _todoSyncService.ConfigureDirectoryAsync(dialog.SelectedPath))
+        if (!await _oneDriveSyncService.ConfigureDirectoryAsync(dialog.SelectedPath))
             MessageBox.Show("无法使用所选目录，请确认目录存在且当前用户具有写入权限。", "DesktopPet");
     }
 
-    private async void SyncTodosNow(object sender, RoutedEventArgs e) => await _todoSyncService.SynchronizeAsync();
+    private async void SyncTodosNow(object sender, RoutedEventArgs e) => await _oneDriveSyncService.SynchronizeAsync();
 
     private void OpenTodoSyncDirectory(object sender, RoutedEventArgs e)
     {
@@ -318,7 +318,7 @@ public partial class SettingsWindow : Window
         Process.Start(new ProcessStartInfo { FileName = directory, UseShellExecute = true });
     }
 
-    private void DisableTodoSync(object sender, RoutedEventArgs e) => _todoSyncService.Disable();
+    private void DisableTodoSync(object sender, RoutedEventArgs e) => _oneDriveSyncService.Disable();
 
     private void LauncherPreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e) => _launcherDragDrop.PreviewMouseLeftButtonDown(e);
     private void LauncherPreviewMouseMove(object sender, MouseEventArgs e) => _launcherDragDrop.PreviewMouseMove(e);

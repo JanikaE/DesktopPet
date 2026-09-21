@@ -118,10 +118,10 @@
                     <Border Margin="6,12,6,6" Padding="20" CornerRadius="15" Background="#AFFFFFFF">
                         <ScrollViewer VerticalScrollBarVisibility="Auto">
                             <StackPanel>
-                                <TextBlock FontSize="16" FontWeight="SemiBold" Text="待办跨设备同步"/>
+                                <TextBlock FontSize="16" FontWeight="SemiBold" Text="数据跨设备同步"/>
                                 <TextBlock Margin="0,10,0,0" Foreground="#6F667A" TextWrapping="Wrap" Text="依赖本机 OneDrive 客户端。DesktopPet 只读写所选同步文件夹，不需要登录授权；云端上传状态请以系统托盘中的 OneDrive 为准。"/>
-                                <TextBlock Margin="0,22,0,7" FontWeight="SemiBold" Text="同步目录"/>
-                                <TextBox x:Name="TodoSyncDirectoryBox" IsReadOnly="True" TextWrapping="Wrap" ToolTip="DesktopPet 待办副本所在目录"/>
+                                <TextBlock Margin="0,22,0,7" FontWeight="SemiBold" Text="同步根目录"/>
+                                <TextBox x:Name="TodoSyncDirectoryBox" IsReadOnly="True" TextWrapping="Wrap" ToolTip="其中分别保存 TodoSync 和 NoteSync 目录"/>
                                 <WrapPanel Margin="0,12,0,0">
                                     <Button x:Name="EnableTodoSyncButton" Width="104" Margin="0,0,8,8" Content="启用同步" Click="EnableTodoSync"/>
                                     <Button x:Name="ChooseTodoSyncDirectoryButton" Width="112" Margin="0,0,8,8" Content="选择其他目录" Click="ChooseTodoSyncDirectory"/>
@@ -136,7 +136,7 @@
                                         <TextBlock x:Name="TodoSyncLastTimeText" Margin="0,5,0,0" Foreground="#897F96" FontSize="12"/>
                                     </StackPanel>
                                 </Border>
-                                <TextBlock Margin="0,16,0,0" Foreground="#897F96" FontSize="12" TextWrapping="Wrap" Text="首次启用时会无损合并本地与同步目录中的待办。同标题待办不会自动去重；停用同步不会删除任何本地或 OneDrive 文件。"/>
+                                <TextBlock Margin="0,16,0,0" Foreground="#897F96" FontSize="12" TextWrapping="Wrap" Text="同步根目录下分别使用 TodoSync 和 NoteSync 保存待办与便签。首次启用时会无损合并本地数据；停用同步不会删除任何本地或 OneDrive 文件。"/>
                             </StackPanel>
                         </ScrollViewer>
                     </Border>

@@ -15,7 +15,7 @@ public static class OneDriveFolderLocator
             var root = Marshal.PtrToStringUni(pathPointer);
             return string.IsNullOrWhiteSpace(root) || !Directory.Exists(root)
                 ? null
-                : Path.Combine(root, "Apps", "DesktopPet", "TodoSync");
+                : Path.Combine(root, "Apps", "DesktopPet");
         }
         finally
         {

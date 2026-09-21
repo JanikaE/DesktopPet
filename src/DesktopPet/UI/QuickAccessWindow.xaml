@@ -81,6 +81,68 @@
                     </ListBox>
                 </Grid>
             </TabItem>
+            <TabItem Header="便签">
+                <Grid Margin="4,10,4,4">
+                    <Grid x:Name="NoteListView">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                        </Grid.RowDefinitions>
+                        <Grid>
+                            <TextBlock VerticalAlignment="Center" FontWeight="SemiBold" Foreground="#65567F" Text="我的便签"/>
+                            <Button Width="76" Height="28" HorizontalAlignment="Right" Content="新建便签" Click="NewNote"/>
+                        </Grid>
+                        <ListBox x:Name="NoteList" Grid.Row="1" Margin="0,8,0,0" ScrollViewer.HorizontalScrollBarVisibility="Disabled" ScrollViewer.VerticalScrollBarVisibility="Auto">
+                            <ListBox.ItemContainerStyle>
+                                <Style TargetType="ListBoxItem">
+                                    <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                                    <Setter Property="Padding" Value="0"/>
+                                </Style>
+                            </ListBox.ItemContainerStyle>
+                            <ListBox.ItemTemplate>
+                                <DataTemplate>
+                                    <Border Margin="2,3" Padding="10,8" Background="#F1ECF7" BorderBrush="#DDD3E9" BorderThickness="1" CornerRadius="12" Cursor="Hand" MouseLeftButtonUp="EditNote">
+                                        <Grid>
+                                            <Grid.RowDefinitions>
+                                                <RowDefinition Height="Auto"/>
+                                                <RowDefinition Height="Auto"/>
+                                            </Grid.RowDefinitions>
+                                            <TextBlock MaxHeight="70" Foreground="#4B4358" Text="{Binding Preview}" TextWrapping="Wrap" TextTrimming="CharacterEllipsis"/>
+                                            <Grid Grid.Row="1" Margin="0,7,0,0">
+                                                <Border x:Name="ConflictBadge" HorizontalAlignment="Left" Padding="6,2" CornerRadius="7" Background="#E2D5EF" Visibility="Collapsed">
+                                                    <TextBlock FontSize="10" Foreground="#715B8C" Text="冲突副本"/>
+                                                </Border>
+                                                <TextBlock HorizontalAlignment="Right" VerticalAlignment="Center" FontSize="10" Foreground="#897F96" Text="{Binding UpdatedAtText}"/>
+                                            </Grid>
+                                        </Grid>
+                                    </Border>
+                                    <DataTemplate.Triggers>
+                                        <DataTrigger Binding="{Binding IsConflict}" Value="True">
+                                            <Setter TargetName="ConflictBadge" Property="Visibility" Value="Visible"/>
+                                        </DataTrigger>
+                                    </DataTemplate.Triggers>
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
+                    </Grid>
+                    <Grid x:Name="NoteEditorView" Visibility="Collapsed">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+                        <Grid>
+                            <Button Width="56" Height="28" HorizontalAlignment="Left" Content="返回" Click="BackFromNote"/>
+                            <Button Width="56" Height="28" HorizontalAlignment="Right" Content="删除" Click="DeleteNote"/>
+                        </Grid>
+                        <TextBox x:Name="NoteContentBox" Grid.Row="1" Margin="0,8,0,8" Padding="10" MaxLength="10000" AcceptsReturn="True" AcceptsTab="True" TextWrapping="Wrap" VerticalContentAlignment="Top" VerticalScrollBarVisibility="Auto" TextChanged="NoteContentChanged"/>
+                        <Grid Grid.Row="2">
+                            <TextBlock x:Name="NoteSaveStatusText" Foreground="#897F96" FontSize="11" Text="输入内容后自动保存"/>
+                            <TextBlock x:Name="NoteCharacterCountText" HorizontalAlignment="Right" Foreground="#897F96" FontSize="11" Text="0 / 10000"/>
+                        </Grid>
+                    </Grid>
+                </Grid>
+            </TabItem>
             <TabItem Header="快捷启动">
                 <Grid Margin="4,10,4,4">
                     <Grid.RowDefinitions>
