@@ -11,13 +11,15 @@ namespace DesktopPet.UI;
 public partial class QuickAccessWindow : Window
 {
     private readonly DesktopPetRepository _repository;
+    private readonly Action _openSettingsLauncher;
     private readonly LauncherDragDrop _launcherDragDrop;
 
-    public QuickAccessWindow(DesktopPetRepository repository)
+    public QuickAccessWindow(DesktopPetRepository repository, Action openSettingsLauncher)
     {
         InitializeComponent();
         SourceInitialized += (_, _) => WindowAppearance.EnableRoundedCorners(this);
         _repository = repository;
+        _openSettingsLauncher = openSettingsLauncher;
         _launcherDragDrop = new LauncherDragDrop(LauncherList, repository);
         _repository.TodosChanged += RepositoryTodosChanged;
         _repository.LaunchersChanged += RepositoryLaunchersChanged;
@@ -136,6 +138,8 @@ public partial class QuickAccessWindow : Window
         if (!File.Exists(item.TargetPath) && !Directory.Exists(item.TargetPath)) { MessageBox.Show("目标路径已不存在。", "DesktopPet"); return; }
         LauncherProcess.Start(item.TargetPath);
     }
+
+    private void OpenSettingsLauncher(object sender, RoutedEventArgs e) => _openSettingsLauncher();
 
     private void RepositoryLaunchersChanged(object? sender, EventArgs e) => LauncherList.ItemsSource = _repository.GetLaunchers();
     private void RepositoryTodosChanged(object? sender, EventArgs e) => Dispatcher.BeginInvoke(() => TodoList.ItemsSource = _repository.GetTodos());

@@ -1,9 +1,123 @@
 <Window x:Class="DesktopPet.UI.QuickAccessWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:ui="clr-namespace:DesktopPet.UI" xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework" Width="284" Height="384" WindowStyle="None" AllowsTransparency="False" Background="#FAF7FC" ShowInTaskbar="False" Topmost="True" ResizeMode="NoResize" WindowStartupLocation="Manual" UseLayoutRounding="True" SnapsToDevicePixels="True" TextOptions.TextFormattingMode="Display" TextOptions.TextRenderingMode="ClearType" PreviewMouseDown="WindowPreviewMouseDown">
-  <shell:WindowChrome.WindowChrome><shell:WindowChrome CaptionHeight="0" CornerRadius="20" GlassFrameThickness="0" ResizeBorderThickness="0" UseAeroCaptionButtons="False"/></shell:WindowChrome.WindowChrome>
-  <Window.Resources><ui:LauncherIconConverter x:Key="LauncherIcon"/></Window.Resources>
-  <Border Padding="10" CornerRadius="20" Background="#FAF7FC" BorderBrush="#D6C8E4" BorderThickness="1">
-    <TabControl><TabItem Header="待办"><Grid Margin="4,10,4,4"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions><TextBox x:Name="TodoTitleBox" ToolTip="输入待办，按回车或点击输入框外自动添加" LostKeyboardFocus="TodoTitleLostFocus" KeyDown="TodoTitleKeyDown"/><ListBox x:Name="TodoList" Grid.Row="1" Margin="0,8,0,0" ScrollViewer.HorizontalScrollBarVisibility="Disabled" ScrollViewer.VerticalScrollBarVisibility="Auto"><ListBox.ItemContainerStyle><Style TargetType="ListBoxItem"><Setter Property="HorizontalContentAlignment" Value="Stretch"/></Style></ListBox.ItemContainerStyle><ListBox.ItemTemplate><DataTemplate><DockPanel Margin="4"><Button DockPanel.Dock="Right" Width="42" Padding="3" Content="删除" Tag="{Binding}" Click="DeleteTodo"/><CheckBox HorizontalContentAlignment="Stretch" IsChecked="{Binding IsCompleted}" Tag="{Binding}" Checked="TodoChanged" Unchecked="TodoChanged"><TextBlock Text="{Binding Title}" TextWrapping="Wrap"><TextBlock.Style><Style TargetType="TextBlock"><Setter Property="Foreground" Value="#4B4358"/><Style.Triggers><DataTrigger Binding="{Binding IsCompleted}" Value="True"><Setter Property="Foreground" Value="#9A92A3"/><Setter Property="TextDecorations" Value="Strikethrough"/></DataTrigger></Style.Triggers></Style></TextBlock.Style></TextBlock></CheckBox></DockPanel></DataTemplate></ListBox.ItemTemplate></ListBox></Grid></TabItem>
-      <TabItem Header="剪切板"><Grid Margin="4,10,4,4"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions><Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBox x:Name="ClipboardContentBox" MinHeight="34" MaxHeight="72" AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" ToolTip="手动输入，或读取系统剪切板；点击输入框外自动添加" LostKeyboardFocus="ClipboardContentLostFocus"/><Button Grid.Column="1" Margin="6,0,0,0" Padding="8,5" Content="读取" ToolTip="读取系统剪切板中的文本" Click="ReadClipboard"/></Grid><ListBox x:Name="ClipboardList" Grid.Row="1" Margin="0,8,0,0" ScrollViewer.HorizontalScrollBarVisibility="Disabled" ScrollViewer.VerticalScrollBarVisibility="Auto"><ListBox.ItemContainerStyle><Style TargetType="ListBoxItem"><Setter Property="HorizontalContentAlignment" Value="Stretch"/></Style></ListBox.ItemContainerStyle><ListBox.ItemTemplate><DataTemplate><Grid Margin="4"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBlock Margin="3" MaxHeight="58" Text="{Binding Content}" TextWrapping="Wrap" TextTrimming="CharacterEllipsis" ToolTip="{Binding Content}"/><Button Grid.Column="1" Margin="4,0,0,0" Width="38" Padding="3" Content="复制" Tag="{Binding}" Click="CopyClipboardItem"/><Button Grid.Column="2" Margin="4,0,0,0" Width="38" Padding="3" Content="删除" Tag="{Binding}" Click="DeleteClipboardItem"/></Grid></DataTemplate></ListBox.ItemTemplate></ListBox></Grid></TabItem>
-      <TabItem Header="快捷启动"><ListBox x:Name="LauncherList" Margin="4,10,4,4" Background="#60FFFFFF" BorderThickness="0" AllowDrop="True" PreviewMouseLeftButtonDown="LauncherPreviewMouseLeftButtonDown" PreviewMouseMove="LauncherPreviewMouseMove" Drop="LauncherDrop" ScrollViewer.HorizontalScrollBarVisibility="Disabled" ScrollViewer.VerticalScrollBarVisibility="Auto"><ListBox.ItemContainerStyle><Style TargetType="ListBoxItem"><Setter Property="HorizontalContentAlignment" Value="Stretch"/><Setter Property="VerticalContentAlignment" Value="Top"/><Setter Property="Padding" Value="0"/></Style></ListBox.ItemContainerStyle><ListBox.ItemsPanel><ItemsPanelTemplate><UniformGrid Columns="3" VerticalAlignment="Top"/></ItemsPanelTemplate></ListBox.ItemsPanel><ListBox.ItemTemplate><DataTemplate><Button Height="88" Margin="3" Padding="4" VerticalAlignment="Top" Tag="{Binding}" Click="Launch"><StackPanel><Image Width="48" Height="48" Source="{Binding TargetPath,Converter={StaticResource LauncherIcon}}"/><TextBlock Margin="0,5,0,0" Text="{Binding Name}" TextAlignment="Center" TextTrimming="CharacterEllipsis"/></StackPanel></Button></DataTemplate></ListBox.ItemTemplate></ListBox></TabItem></TabControl>
-  </Border>
+    <shell:WindowChrome.WindowChrome>
+        <shell:WindowChrome CaptionHeight="0" CornerRadius="20" GlassFrameThickness="0" ResizeBorderThickness="0" UseAeroCaptionButtons="False"/>
+    </shell:WindowChrome.WindowChrome>
+    <Window.Resources>
+        <ui:LauncherIconConverter x:Key="LauncherIcon"/>
+    </Window.Resources>
+    <Border Padding="10" CornerRadius="20" Background="#FAF7FC" BorderBrush="#D6C8E4" BorderThickness="1">
+        <TabControl>
+            <TabItem Header="待办">
+                <Grid Margin="4,10,4,4">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+                    <TextBox x:Name="TodoTitleBox" ToolTip="输入待办，按回车或点击输入框外自动添加" LostKeyboardFocus="TodoTitleLostFocus" KeyDown="TodoTitleKeyDown"/>
+                    <ListBox x:Name="TodoList" Grid.Row="1" Margin="0,8,0,0" ScrollViewer.HorizontalScrollBarVisibility="Disabled" ScrollViewer.VerticalScrollBarVisibility="Auto">
+                        <ListBox.ItemContainerStyle>
+                            <Style TargetType="ListBoxItem">
+                                <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                            </Style>
+                        </ListBox.ItemContainerStyle>
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <DockPanel Margin="4">
+                                    <Button DockPanel.Dock="Right" Width="42" Padding="3" Content="删除" Tag="{Binding}" Click="DeleteTodo"/>
+                                    <CheckBox HorizontalContentAlignment="Stretch" IsChecked="{Binding IsCompleted}" Tag="{Binding}" Checked="TodoChanged" Unchecked="TodoChanged">
+                                        <TextBlock Text="{Binding Title}" TextWrapping="Wrap">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock">
+                                                    <Setter Property="Foreground" Value="#4B4358"/>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding IsCompleted}" Value="True">
+                                                            <Setter Property="Foreground" Value="#9A92A3"/>
+                                                            <Setter Property="TextDecorations" Value="Strikethrough"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style></TextBlock>
+                                    </CheckBox>
+                                </DockPanel>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                </Grid>
+            </TabItem>
+            <TabItem Header="剪切板">
+                <Grid Margin="4,10,4,4">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBox x:Name="ClipboardContentBox" MinHeight="34" MaxHeight="72" AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" ToolTip="手动输入，或读取系统剪切板；点击输入框外自动添加" LostKeyboardFocus="ClipboardContentLostFocus"/>
+                        <Button Grid.Column="1" Margin="6,0,0,0" Padding="8,5" Content="读取" ToolTip="读取系统剪切板中的文本" Click="ReadClipboard"/>
+                    </Grid>
+                    <ListBox x:Name="ClipboardList" Grid.Row="1" Margin="0,8,0,0" ScrollViewer.HorizontalScrollBarVisibility="Disabled" ScrollViewer.VerticalScrollBarVisibility="Auto">
+                        <ListBox.ItemContainerStyle>
+                            <Style TargetType="ListBoxItem">
+                                <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                            </Style>
+                        </ListBox.ItemContainerStyle>
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <Grid Margin="4">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Margin="3" MaxHeight="58" Text="{Binding Content}" TextWrapping="Wrap" TextTrimming="CharacterEllipsis" ToolTip="{Binding Content}"/>
+                                    <Button Grid.Column="1" Margin="4,0,0,0" Width="38" Padding="3" Content="复制" Tag="{Binding}" Click="CopyClipboardItem"/>
+                                    <Button Grid.Column="2" Margin="4,0,0,0" Width="38" Padding="3" Content="删除" Tag="{Binding}" Click="DeleteClipboardItem"/>
+                                </Grid>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                </Grid>
+            </TabItem>
+            <TabItem Header="快捷启动">
+                <Grid Margin="4,10,4,4">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+                    <ListBox x:Name="LauncherList" AllowDrop="True" PreviewMouseLeftButtonDown="LauncherPreviewMouseLeftButtonDown" PreviewMouseMove="LauncherPreviewMouseMove" Drop="LauncherDrop" ScrollViewer.HorizontalScrollBarVisibility="Disabled" ScrollViewer.VerticalScrollBarVisibility="Auto">
+                        <ListBox.ItemContainerStyle>
+                            <Style TargetType="ListBoxItem">
+                                <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                                <Setter Property="VerticalContentAlignment" Value="Top"/>
+                                <Setter Property="Padding" Value="0"/>
+                            </Style>
+                        </ListBox.ItemContainerStyle>
+                        <ListBox.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <UniformGrid Columns="3" VerticalAlignment="Top"/>
+                            </ItemsPanelTemplate>
+                        </ListBox.ItemsPanel>
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <Button Height="98" Margin="3" Padding="4" VerticalAlignment="Top" Tag="{Binding}" Click="Launch" ToolTip="{Binding TargetPath}">
+                                    <StackPanel>
+                                        <Image Width="48" Height="48" HorizontalAlignment="Center" Source="{Binding TargetPath,Converter={StaticResource LauncherIcon}}"/>
+                                        <Grid Height="34" Margin="0,4,0,0">
+                                            <TextBlock Text="{Binding Name}" TextAlignment="Center" TextWrapping="Wrap" VerticalAlignment="Center" MaxHeight="34" ToolTip="{Binding TargetPath}"/>
+                                        </Grid>
+                                    </StackPanel>
+                                </Button>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                    <Border Grid.Row="1" Margin="0,6,0,0">
+                        <Button Width="110" Height="30" HorizontalAlignment="Right" Content="添加项目" Click="OpenSettingsLauncher"/>
+                    </Border>
+                </Grid>
+            </TabItem>
+        </TabControl>
+    </Border>
 </Window>

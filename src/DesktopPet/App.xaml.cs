@@ -151,10 +151,21 @@ public partial class App : System.Windows.Application
 
     private void ShowSettings()
     {
+        ShowSettings(openLauncherTab: false);
+    }
+
+    private void ShowSettingsLauncherTab()
+    {
+        ShowSettings(openLauncherTab: true);
+    }
+
+    private void ShowSettings(bool openLauncherTab)
+    {
         if (_petWindow is null) return;
         if (_settingsWindow is { IsVisible: true })
         {
-            _settingsWindow.Activate();
+            if (openLauncherTab) _settingsWindow.ActivateLauncherTab();
+            else _settingsWindow.Activate();
             return;
         }
 
@@ -165,6 +176,7 @@ public partial class App : System.Windows.Application
             SetVisibilityHotkey,
             SetKeyboardStatisticsHotkey,
             SetMouseStatisticsHotkey);
+        if (openLauncherTab) _settingsWindow.ActivateLauncherTab();
         _settingsWindow.Closed += (_, _) => _settingsWindow = null;
         _settingsWindow.Show();
     }
@@ -214,7 +226,7 @@ public partial class App : System.Windows.Application
 
         if (_quickAccessWindow is null)
         {
-            _quickAccessWindow = new QuickAccessWindow(_repository);
+            _quickAccessWindow = new QuickAccessWindow(_repository, ShowSettingsLauncherTab);
             _quickAccessWindow.Owner = _petWindow;
             _quickAccessWindow.Closed += (_, _) => _quickAccessWindow = null;
         }

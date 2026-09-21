@@ -533,11 +533,22 @@ public sealed class DesktopPetRepository(string databasePath)
         return item;
     }
 
-    public void DeleteLauncher(long id)
-    {
-        Execute("DELETE FROM launchers WHERE id = $id;", ("$id", id));
-        LaunchersChanged?.Invoke(this, EventArgs.Empty);
-    }
+public void DeleteLauncher(long id)
+{
+    Execute("DELETE FROM launchers WHERE id = $id;", ("$id", id));
+    LaunchersChanged?.Invoke(this, EventArgs.Empty);
+}
+
+public void RenameLauncher(long id, string name)
+{
+    using var connection = OpenConnection();
+    using var command = connection.CreateCommand();
+    command.CommandText = "UPDATE launchers SET name = $name WHERE id = $id;";
+    command.Parameters.AddWithValue("$name", name);
+    command.Parameters.AddWithValue("$id", id);
+    command.ExecuteNonQuery();
+    LaunchersChanged?.Invoke(this, EventArgs.Empty);
+}
 
     public void ReorderLaunchers(IReadOnlyList<long> launcherIds)
     {
@@ -758,7 +769,35 @@ public sealed class DesktopPetRepository(string databasePath)
 
 public sealed record TodoItem(Guid Id, string Title, bool IsCompleted);
 public sealed record ClipboardItem(long Id, string Content);
-public sealed record LauncherItem(long Id, string Name, string TargetPath);
+
+public sealed class LauncherItem(long id, string name, string targetPath) : System.ComponentModel.INotifyPropertyChanged
+{
+    public long Id { get; } = id;
+    public string TargetPath { get; } = targetPath;
+    public string Name
+    {
+        get => _name;
+        set
+        {
+            if (_name == value) return;
+            _name = value;
+            PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(Name)));
+        }
+    }
+    public bool IsEditing
+    {
+        get => _isEditing;
+        set
+        {
+            if (_isEditing == value) return;
+            _isEditing = value;
+            PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(IsEditing)));
+        }
+    }
+    public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
+    private string _name = name;
+    private bool _isEditing;
+}
 
 public sealed record MouseDailyTotals(double MoveDistance, long LeftClicks, long RightClicks, long MiddleClicks, long WheelUnits, long DoubleClicks)
 {

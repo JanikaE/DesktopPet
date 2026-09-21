@@ -4,7 +4,9 @@ using DesktopPet.Data;
 using Microsoft.Win32;
 using System.Diagnostics;
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Media;
 using Forms = System.Windows.Forms;
 
 namespace DesktopPet.UI;
@@ -19,6 +21,7 @@ public partial class SettingsWindow : Window
     private readonly Func<HotkeyGesture?, bool> _setKeyboardStatisticsHotkey;
     private readonly Func<HotkeyGesture?, bool> _setMouseStatisticsHotkey;
     private bool _isLoading;
+    private bool _launcherTabRequested;
 
     public SettingsWindow(
         MainWindow pet,
@@ -30,6 +33,14 @@ public partial class SettingsWindow : Window
     {
         InitializeComponent();
         SourceInitialized += (_, _) => WindowAppearance.EnableRoundedCorners(this);
+        Loaded += (_, _) =>
+        {
+            if (_launcherTabRequested)
+            {
+                _launcherTabRequested = false;
+                Activate();
+            }
+        };
         _pet = pet;
         _repository = repository;
         _todoSyncService = todoSyncService;
@@ -137,49 +148,125 @@ public partial class SettingsWindow : Window
 
     private void CloseSettingsWindow(object sender, RoutedEventArgs e) => Close();
 
-    private void BrowseApplication(object sender, RoutedEventArgs e)
+    private void BrowseFile(object sender, RoutedEventArgs e)
     {
-        var dialog = new OpenFileDialog { Filter = "程序文件 (*.exe)|*.exe|所有文件 (*.*)|*.*" };
-        if (dialog.ShowDialog() == true) SetPath(dialog.FileName);
+        var dialog = new OpenFileDialog { Filter = "所有文件 (*.*)|*.*" };
+        if (dialog.ShowDialog() == true) AddLauncher(dialog.FileName);
     }
 
     private void BrowseFolder(object sender, RoutedEventArgs e)
     {
         using var dialog = new Forms.FolderBrowserDialog();
-        if (dialog.ShowDialog() == Forms.DialogResult.OK) SetPath(dialog.SelectedPath);
+        if (dialog.ShowDialog() == Forms.DialogResult.OK) AddLauncher(dialog.SelectedPath);
     }
 
-    private void SetPath(string path)
+    private void AddLauncher(string path)
     {
-        LauncherPathBox.Text = path;
-        if (string.IsNullOrWhiteSpace(LauncherNameBox.Text))
-            LauncherNameBox.Text = Directory.Exists(path) ? new DirectoryInfo(path).Name : Path.GetFileNameWithoutExtension(path);
-    }
-
-    private void AddLauncher(object sender, RoutedEventArgs e)
-    {
-        var path = LauncherPathBox.Text.Trim();
-        if (!File.Exists(path) && !Directory.Exists(path)) { MessageBox.Show("请选择存在的程序或文件夹。", "DesktopPet"); return; }
-        var name = LauncherNameBox.Text.Trim();
-        if (name.Length == 0) name = Directory.Exists(path) ? new DirectoryInfo(path).Name : Path.GetFileNameWithoutExtension(path);
+        if (!File.Exists(path) && !Directory.Exists(path)) { MessageBox.Show("请选择存在的文件或文件夹。", "DesktopPet"); return; }
+        var name = Directory.Exists(path) ? new DirectoryInfo(path).Name : Path.GetFileNameWithoutExtension(path);
         try
         {
             _repository.AddLauncher(name, path);
-            LauncherNameBox.Clear();
-            LauncherPathBox.Clear();
             RefreshLaunchers();
         }
         catch (Microsoft.Data.Sqlite.SqliteException) { MessageBox.Show("这个路径已经在快捷启动列表中。", "DesktopPet"); }
     }
 
-    private void LaunchSelected(object sender, MouseButtonEventArgs e)
+    private TextBox? _editingBox;
+
+    private void CardMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
-        if (LauncherList.SelectedItem is LauncherItem item) LauncherProcess.Start(item.TargetPath);
+        if (e.ClickCount != 2 || ((FrameworkElement)sender).DataContext is not LauncherItem item) return;
+        item.IsEditing = true;
+        if (((FrameworkElement)sender).IsLoaded) Dispatcher.BeginInvoke(() =>
+        {
+            if (FindDescendantTextBox((System.Windows.DependencyObject)sender) is { } box)
+            {
+                _editingBox = box;
+                box.Focus();
+                box.SelectAll();
+            }
+        });
+    }
+
+    private void LauncherNameKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key is not (Key.Enter or Key.Return)) return;
+        e.Handled = true;
+        CommitLauncherName(sender as TextBox);
+    }
+
+    private void LauncherNameLostFocus(object sender, RoutedEventArgs e)
+    {
+        if (sender is TextBox box) CommitLauncherName(box);
+    }
+
+    private void WindowPreviewMouseDown(object sender, MouseButtonEventArgs e)
+    {
+        if (_editingBox is null) return;
+        var source = e.OriginalSource as DependencyObject;
+        if (IsWithin(source, _editingBox)) return;
+        CommitLauncherName(_editingBox);
+    }
+
+    private void CommitLauncherName(TextBox? box)
+    {
+        if (box is null || box.DataContext is not LauncherItem item) return;
+        var trimmed = box.Text.Trim();
+        if (trimmed.Length == 0) trimmed = Directory.Exists(item.TargetPath) ? new DirectoryInfo(item.TargetPath).Name : Path.GetFileNameWithoutExtension(item.TargetPath);
+        if (!string.Equals(trimmed, item.Name, StringComparison.Ordinal))
+        {
+            box.Text = trimmed;
+            _repository.RenameLauncher(item.Id, trimmed);
+        }
+        item.IsEditing = false;
+        if (ReferenceEquals(_editingBox, box)) _editingBox = null;
+    }
+
+    private static TextBox? FindDescendantTextBox(System.Windows.DependencyObject root)
+    {
+        var stack = new Stack<System.Windows.DependencyObject>();
+        stack.Push(root);
+        while (stack.Count > 0)
+        {
+            var current = stack.Pop();
+            if (current is TextBox textBox) return textBox;
+            var count = System.Windows.Media.VisualTreeHelper.GetChildrenCount(current);
+            for (var index = 0; index < count; index++) stack.Push(System.Windows.Media.VisualTreeHelper.GetChild(current, index));
+        }
+        return null;
+    }
+
+    private static bool IsWithin(DependencyObject? source, DependencyObject ancestor)
+    {
+        for (var current = source; current is not null; current = current is Visual
+            ? System.Windows.Media.VisualTreeHelper.GetParent(current)
+            : LogicalTreeHelper.GetParent(current))
+        {
+            if (ReferenceEquals(current, ancestor)) return true;
+        }
+        return false;
     }
 
     private void DeleteLauncher(object sender, RoutedEventArgs e)
     {
-        if (((FrameworkElement)sender).Tag is LauncherItem item) { _repository.DeleteLauncher(item.Id); RefreshLaunchers(); }
+        if (GetContextMenuLauncherItem(sender) is not LauncherItem item) return;
+        _repository.DeleteLauncher(item.Id);
+        RefreshLaunchers();
+    }
+
+    private static LauncherItem? GetContextMenuLauncherItem(object sender)
+    {
+        if (sender is not MenuItem menuItem) return null;
+        var contextMenu = LogicalTreeHelper.GetParent(menuItem) as ContextMenu;
+        return contextMenu?.PlacementTarget is FrameworkElement { DataContext: LauncherItem item } ? item : null;
+    }
+
+    public void ActivateLauncherTab()
+    {
+        LauncherTab.IsSelected = true;
+        if (IsVisible) Activate();
+        else _launcherTabRequested = true;
     }
 
     private void RefreshLaunchers() => LauncherList.ItemsSource = _repository.GetLaunchers();
