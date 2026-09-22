@@ -6,36 +6,65 @@ using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
+using System.Windows.Shapes;
+using System.Windows.Threading;
 
 namespace DesktopPet.UI;
 
 public partial class KeyboardStatisticsWindow : Window
 {
     private const double KeyWidth = 35;
+    private const double PlotLeft = 58;
+    private const double PlotTop = 16;
+    private const double PlotRight = 14;
+    private const double PlotBottom = 32;
     private static readonly Color LiveFlashColor = Color.FromRgb(141, 122, 184);
+    private static readonly Color AccentColor = Color.FromRgb(141, 122, 184);
+    private static readonly SolidColorBrush MutedBrush = new(Color.FromRgb(137, 127, 150));
+    private static readonly SolidColorBrush GridBrush = new(Color.FromRgb(225, 217, 235));
     private readonly DesktopPetRepository _repository;
     private readonly Action _flushPending;
+    private readonly Action<string> _saveLayout;
     private readonly Dictionary<int, List<Border>> _keyViews = [];
     private readonly Dictionary<int, long> _liveIncrements = [];
     private IReadOnlyDictionary<int, long> _counts = new Dictionary<int, long>();
+    private IReadOnlyDictionary<DateOnly, long> _dailyTotals = new Dictionary<DateOnly, long>();
     private HashSet<DateOnly> _datesWithData = [];
     private DateTime? _rangeStart;
     private DateTime? _rangeEnd;
     private DateTime? _rangeAnchor;
     private bool _updatingDates;
+    private bool _updatingLayout;
     private bool _liveRange;
+    private bool _showingTrend;
+    private bool _trendRenderPending;
+    private bool _trendRangeValid;
     private long _maximum = 1;
+    private long _trendAxisMaximum = 1;
+    private DateOnly _trendStart;
+    private DateOnly _trendEnd;
+    private DateOnly _todayAtRefresh;
 
-    public KeyboardStatisticsWindow(DesktopPetRepository repository, KeyboardStatisticsService keyboardStatistics)
+    public KeyboardStatisticsWindow(
+        DesktopPetRepository repository,
+        KeyboardStatisticsService keyboardStatistics,
+        string keyboardLayoutId,
+        Action<string> saveLayout)
     {
         InitializeComponent();
         SourceInitialized += (_, _) => WindowAppearance.EnableRoundedCorners(this);
         _repository = repository;
         _flushPending = keyboardStatistics.Flush;
+        _saveLayout = saveLayout;
         keyboardStatistics.KeyPressed += OnKeyPressed;
         Closed += (_, _) => keyboardStatistics.KeyPressed -= OnKeyPressed;
         RangeCalendar.AddHandler(PreviewMouseLeftButtonDownEvent, new MouseButtonEventHandler(CalendarPreviewMouseDown), handledEventsToo: true);
-        BuildKeyboard();
+        _updatingLayout = true;
+        LayoutBox.ItemsSource = KeyboardLayoutCatalog.All;
+        LayoutBox.SelectedItem = KeyboardLayoutCatalog.Find(keyboardLayoutId);
+        _updatingLayout = false;
+        BuildKeyboard((KeyboardLayoutDefinition)LayoutBox.SelectedItem);
+        UpdateViewState();
         RangeBox.SelectedIndex = 0;
     }
 
@@ -45,9 +74,13 @@ public partial class KeyboardStatisticsWindow : Window
         _datesWithData = _repository.GetKeyboardStatisticDates().ToHashSet();
         var (start, end) = GetSelectedRange();
         _counts = _repository.GetKeyboardStatistics(start, end);
+        _dailyTotals = _repository.GetKeyboardDailyTotals(start, end);
         _liveRange = RangeIncludesToday(start, end);
         _liveIncrements.Clear();
+        _todayAtRefresh = DateOnly.FromDateTime(DateTime.Now);
+        SetTrendRange(start, end);
         ApplyCounts();
+        RenderTrend();
     }
 
     private static bool RangeIncludesToday(DateOnly? start, DateOnly? end)
@@ -75,9 +108,25 @@ public partial class KeyboardStatisticsWindow : Window
 
     private void OnKeyPressed(object? sender, int keyCode)
     {
-        if (!IsVisible || !_liveRange) return;
-        if (!_keyViews.TryGetValue(keyCode, out var views)) return;
+        if (!IsVisible) return;
+        var today = DateOnly.FromDateTime(DateTime.Now);
+        if (today != _todayAtRefresh)
+        {
+            RefreshStatistics();
+            if (!_showingTrend && _liveRange && _keyViews.TryGetValue(keyCode, out var refreshedViews)) FlashKey(refreshedViews);
+            return;
+        }
+        if (!_liveRange) return;
+
         _liveIncrements[keyCode] = _liveIncrements.GetValueOrDefault(keyCode) + 1;
+        TotalCountText.Text = $"合计 {DisplayTotal():N0} 次";
+        if (_showingTrend)
+        {
+            RequestTrendRender();
+            return;
+        }
+
+        if (!_keyViews.TryGetValue(keyCode, out var views)) return;
         var maximum = RecalculateMaximum();
         if (maximum != _maximum)
         {
@@ -92,7 +141,6 @@ public partial class KeyboardStatisticsWindow : Window
                 view.Background = HeatBrush(count, _maximum);
                 SetCountText(view, count);
             }
-            TotalCountText.Text = $"合计 {DisplayTotal():N0} 次";
         }
         FlashKey(views);
     }
@@ -100,9 +148,7 @@ public partial class KeyboardStatisticsWindow : Window
     private long RecalculateMaximum()
     {
         var maximum = 1L;
-        var keyCodes = new HashSet<int>(_counts.Keys);
-        keyCodes.UnionWith(_liveIncrements.Keys);
-        foreach (var keyCode in keyCodes)
+        foreach (var keyCode in _keyViews.Keys)
         {
             var count = DisplayCount(keyCode);
             if (count > maximum) maximum = count;
@@ -146,6 +192,323 @@ public partial class KeyboardStatisticsWindow : Window
         AutoReverse = true,
         FillBehavior = FillBehavior.Stop
     };
+
+    private void ShowDistributionView(object sender, RoutedEventArgs e)
+    {
+        _showingTrend = false;
+        UpdateViewState();
+    }
+
+    private void ShowTrendView(object sender, RoutedEventArgs e)
+    {
+        _showingTrend = true;
+        UpdateViewState();
+        RequestTrendRender();
+    }
+
+    private void UpdateViewState()
+    {
+        KeyboardGrid.Visibility = _showingTrend ? Visibility.Collapsed : Visibility.Visible;
+        TrendHost.Visibility = _showingTrend ? Visibility.Visible : Visibility.Collapsed;
+        LayoutBox.Visibility = _showingTrend ? Visibility.Collapsed : Visibility.Visible;
+        SetViewButtonAppearance(DistributionViewButton, !_showingTrend);
+        SetViewButtonAppearance(TrendViewButton, _showingTrend);
+        if (!_showingTrend) ApplyCounts();
+    }
+
+    private static void SetViewButtonAppearance(Button button, bool selected)
+    {
+        button.Background = new SolidColorBrush(selected ? AccentColor : Color.FromRgb(244, 239, 248));
+        button.Foreground = new SolidColorBrush(selected ? Colors.White : Color.FromRgb(101, 86, 127));
+        button.BorderBrush = new SolidColorBrush(selected ? AccentColor : Color.FromRgb(205, 191, 224));
+    }
+
+    private void LayoutChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_updatingLayout || LayoutBox.SelectedItem is not KeyboardLayoutDefinition layout) return;
+        BuildKeyboard(layout);
+        ApplyCounts();
+        _saveLayout(layout.Id);
+    }
+
+    private void SetTrendRange(DateOnly? start, DateOnly? end)
+    {
+        if (start is { } from && end is { } to)
+        {
+            _trendRangeValid = from <= to;
+            _trendStart = _trendRangeValid ? from : _todayAtRefresh;
+            _trendEnd = _trendRangeValid ? to : _todayAtRefresh;
+            return;
+        }
+
+        _trendRangeValid = true;
+        if (_dailyTotals.Count > 0)
+        {
+            _trendStart = _dailyTotals.Keys.Min();
+            _trendEnd = _dailyTotals.Keys.Max();
+        }
+        else
+        {
+            _trendStart = _todayAtRefresh;
+            _trendEnd = _todayAtRefresh;
+        }
+    }
+
+    private long DailyCount(DateOnly date)
+    {
+        var count = _dailyTotals.GetValueOrDefault(date);
+        if (date == _todayAtRefresh) count += _liveIncrements.Values.Sum();
+        return count;
+    }
+
+    private bool HasTrendData() => _dailyTotals.Values.Any(value => value > 0) || _liveIncrements.Values.Sum() > 0;
+
+    private void TrendHostSizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        if (_showingTrend) RenderTrend();
+    }
+
+    private void RequestTrendRender()
+    {
+        if (_trendRenderPending) return;
+        _trendRenderPending = true;
+        Dispatcher.InvokeAsync(() =>
+        {
+            _trendRenderPending = false;
+            RenderTrend();
+        }, DispatcherPriority.Background);
+    }
+
+    private void RenderTrend()
+    {
+        if (!_showingTrend) return;
+        TrendCanvas.Children.Clear();
+        TrendHoverCanvas.Children.Clear();
+        var width = TrendCanvas.ActualWidth;
+        var height = TrendCanvas.ActualHeight;
+        if (width < PlotLeft + PlotRight + 20 || height < PlotTop + PlotBottom + 20) return;
+        if (!_trendRangeValid || !HasTrendData())
+        {
+            var empty = new TextBlock
+            {
+                Text = "该范围暂无按键记录",
+                Foreground = MutedBrush,
+                FontSize = 13,
+                Width = width,
+                TextAlignment = TextAlignment.Center
+            };
+            Canvas.SetTop(empty, Math.Max(0, height / 2 - 10));
+            TrendCanvas.Children.Add(empty);
+            return;
+        }
+
+        var plotWidth = width - PlotLeft - PlotRight;
+        var plotHeight = height - PlotTop - PlotBottom;
+        var maxValue = Math.Max(1, _dailyTotals.Values.DefaultIfEmpty(0).Max());
+        if (_liveRange) maxValue = Math.Max(maxValue, DailyCount(_todayAtRefresh));
+        _trendAxisMaximum = NiceAxisMaximum(maxValue);
+
+        const int yDivisions = 4;
+        for (var index = 0; index <= yDivisions; index++)
+        {
+            var y = PlotTop + plotHeight - index * plotHeight / yDivisions;
+            TrendCanvas.Children.Add(new Line { X1 = PlotLeft, X2 = width - PlotRight, Y1 = y, Y2 = y, Stroke = GridBrush, StrokeThickness = 1 });
+            var value = (long)Math.Round(_trendAxisMaximum * index / (double)yDivisions);
+            var label = new TextBlock { Text = FormatAxisValue(value), Foreground = MutedBrush, FontSize = 10, Width = PlotLeft - 8, TextAlignment = TextAlignment.Right };
+            Canvas.SetLeft(label, 0);
+            Canvas.SetTop(label, y - 7);
+            TrendCanvas.Children.Add(label);
+        }
+
+        foreach (var tick in GetHorizontalTicks(plotWidth))
+        {
+            var x = DateX(tick, plotWidth);
+            TrendCanvas.Children.Add(new Line { X1 = x, X2 = x, Y1 = PlotTop, Y2 = PlotTop + plotHeight, Stroke = GridBrush, StrokeThickness = 1, Opacity = .65 });
+            var label = new TextBlock { Text = FormatHorizontalTick(tick), Foreground = MutedBrush, FontSize = 10, Width = 68, TextAlignment = TextAlignment.Center };
+            Canvas.SetLeft(label, Math.Clamp(x - 34, 0, Math.Max(0, width - 68)));
+            Canvas.SetTop(label, PlotTop + plotHeight + 7);
+            TrendCanvas.Children.Add(label);
+        }
+
+        var series = BuildTrendSeries();
+        var polyline = new Polyline
+        {
+            Stroke = new SolidColorBrush(AccentColor),
+            StrokeThickness = 2.25,
+            StrokeLineJoin = PenLineJoin.Round
+        };
+        foreach (var (date, count) in series)
+            polyline.Points.Add(new Point(DateX(date, plotWidth), ValueY(count, plotHeight)));
+        TrendCanvas.Children.Add(polyline);
+
+        if (_trendStart == _trendEnd)
+        {
+            var count = DailyCount(_trendStart);
+            var dot = new Ellipse { Width = 8, Height = 8, Fill = new SolidColorBrush(AccentColor) };
+            Canvas.SetLeft(dot, DateX(_trendStart, plotWidth) - 4);
+            Canvas.SetTop(dot, ValueY(count, plotHeight) - 4);
+            TrendCanvas.Children.Add(dot);
+        }
+    }
+
+    private IReadOnlyList<(DateOnly Date, long Count)> BuildTrendSeries()
+    {
+        var values = new SortedDictionary<DateOnly, long>();
+        foreach (var (date, count) in _dailyTotals)
+            if (date >= _trendStart && date <= _trendEnd && count > 0) values[date] = count;
+        if (_todayAtRefresh >= _trendStart && _todayAtRefresh <= _trendEnd)
+        {
+            var live = _liveIncrements.Values.Sum();
+            if (live > 0) values[_todayAtRefresh] = values.GetValueOrDefault(_todayAtRefresh) + live;
+        }
+
+        var series = new List<(DateOnly Date, long Count)>();
+        AddSeriesPoint(series, _trendStart, values.GetValueOrDefault(_trendStart));
+        var previous = _trendStart;
+        foreach (var (date, count) in values)
+        {
+            if (date < _trendStart || date > _trendEnd) continue;
+            var gap = date.DayNumber - previous.DayNumber;
+            if (gap > 1) AddSeriesPoint(series, previous.AddDays(1), 0);
+            if (gap > 2) AddSeriesPoint(series, date.AddDays(-1), 0);
+            AddSeriesPoint(series, date, count);
+            previous = date;
+        }
+        var endGap = _trendEnd.DayNumber - previous.DayNumber;
+        if (endGap > 1) AddSeriesPoint(series, previous.AddDays(1), 0);
+        AddSeriesPoint(series, _trendEnd, values.GetValueOrDefault(_trendEnd));
+        return series;
+    }
+
+    private static void AddSeriesPoint(List<(DateOnly Date, long Count)> series, DateOnly date, long count)
+    {
+        if (series.Count > 0 && series[^1].Date == date) series[^1] = (date, count);
+        else series.Add((date, count));
+    }
+
+    private IEnumerable<DateOnly> GetHorizontalTicks(double plotWidth)
+    {
+        var spanDays = _trendEnd.DayNumber - _trendStart.DayNumber + 1;
+        if (spanDays <= 31)
+        {
+            var step = ChooseInterval(Math.Ceiling(spanDays * 52 / Math.Max(1, plotWidth)), [1, 2, 3, 5, 7, 10, 14]);
+            for (var date = _trendStart; date <= _trendEnd;)
+            {
+                yield return date;
+                if (_trendEnd.DayNumber - date.DayNumber < step) break;
+                date = date.AddDays(step);
+            }
+            yield break;
+        }
+
+        if (spanDays <= 180)
+        {
+            var offset = ((int)DayOfWeek.Monday - (int)_trendStart.DayOfWeek + 7) % 7;
+            var first = _trendStart.AddDays(offset);
+            var weeks = Math.Max(1, (spanDays + 6) / 7);
+            var step = ChooseInterval(Math.Ceiling(weeks * 58 / Math.Max(1, plotWidth)), [1, 2, 4, 8]);
+            for (var date = first; date <= _trendEnd;)
+            {
+                yield return date;
+                var stepDays = step * 7;
+                if (_trendEnd.DayNumber - date.DayNumber < stepDays) break;
+                date = date.AddDays(stepDays);
+            }
+            yield break;
+        }
+
+        var firstMonth = new DateOnly(_trendStart.Year, _trendStart.Month, 1);
+        if (firstMonth < _trendStart)
+        {
+            if (_trendStart.Year == DateOnly.MaxValue.Year && _trendStart.Month == DateOnly.MaxValue.Month) yield break;
+            firstMonth = firstMonth.AddMonths(1);
+        }
+        var months = Math.Max(1, (_trendEnd.Year - _trendStart.Year) * 12 + _trendEnd.Month - _trendStart.Month + 1);
+        var monthStep = ChooseInterval(Math.Ceiling(months * 66 / Math.Max(1, plotWidth)), [1, 2, 3, 6, 12, 24, 36, 60]);
+        for (var date = firstMonth; date <= _trendEnd;)
+        {
+            yield return date;
+            var remainingMonths = (_trendEnd.Year - date.Year) * 12 + _trendEnd.Month - date.Month;
+            if (remainingMonths < monthStep) break;
+            date = date.AddMonths(monthStep);
+        }
+    }
+
+    private string FormatHorizontalTick(DateOnly date)
+    {
+        var spanDays = _trendEnd.DayNumber - _trendStart.DayNumber + 1;
+        if (spanDays <= 180) return date.ToString("MM-dd");
+        return _trendStart.Year == _trendEnd.Year ? date.ToString("MM月") : date.ToString("yyyy-MM");
+    }
+
+    private static int ChooseInterval(double minimum, IReadOnlyList<int> candidates)
+    {
+        foreach (var candidate in candidates) if (candidate >= minimum) return candidate;
+        var largest = candidates[^1];
+        return Math.Max(largest, (int)Math.Ceiling(minimum / largest) * largest);
+    }
+
+    private static long NiceAxisMaximum(long maximum)
+    {
+        if (maximum <= 4) return 4;
+        var roughStep = maximum / 4d;
+        var magnitude = Math.Pow(10, Math.Floor(Math.Log10(roughStep)));
+        var normalized = roughStep / magnitude;
+        var nice = normalized <= 1 ? 1 : normalized <= 2 ? 2 : normalized <= 5 ? 5 : 10;
+        var step = nice * magnitude;
+        return (long)Math.Ceiling(maximum / step) * (long)step;
+    }
+
+    private static string FormatAxisValue(long value) => value switch
+    {
+        >= 100_000_000 => $"{value / 100_000_000d:0.#}亿",
+        >= 10_000 => $"{value / 10_000d:0.#}万",
+        _ => value.ToString("N0")
+    };
+
+    private double DateX(DateOnly date, double plotWidth)
+    {
+        var span = _trendEnd.DayNumber - _trendStart.DayNumber;
+        return span == 0 ? PlotLeft + plotWidth / 2 : PlotLeft + (date.DayNumber - _trendStart.DayNumber) * plotWidth / span;
+    }
+
+    private double ValueY(long value, double plotHeight) => PlotTop + plotHeight * (1 - value / (double)Math.Max(1, _trendAxisMaximum));
+
+    private void TrendMouseMove(object sender, MouseEventArgs e)
+    {
+        TrendHoverCanvas.Children.Clear();
+        if (!_showingTrend || !_trendRangeValid || !HasTrendData()) return;
+        var width = TrendHoverCanvas.ActualWidth;
+        var height = TrendHoverCanvas.ActualHeight;
+        var plotWidth = width - PlotLeft - PlotRight;
+        var plotHeight = height - PlotTop - PlotBottom;
+        if (plotWidth <= 0 || plotHeight <= 0) return;
+        var pointer = e.GetPosition(TrendHoverCanvas);
+        if (pointer.X < PlotLeft || pointer.X > PlotLeft + plotWidth || pointer.Y < PlotTop || pointer.Y > PlotTop + plotHeight) return;
+
+        var span = _trendEnd.DayNumber - _trendStart.DayNumber;
+        var dayOffset = span == 0 ? 0 : (int)Math.Round((pointer.X - PlotLeft) / plotWidth * span);
+        var date = _trendStart.AddDays(Math.Clamp(dayOffset, 0, span));
+        var count = DailyCount(date);
+        var x = DateX(date, plotWidth);
+        var y = ValueY(count, plotHeight);
+        TrendHoverCanvas.Children.Add(new Line { X1 = x, X2 = x, Y1 = PlotTop, Y2 = PlotTop + plotHeight, Stroke = new SolidColorBrush(AccentColor), StrokeThickness = 1, Opacity = .65 });
+        var dot = new Ellipse { Width = 8, Height = 8, Fill = new SolidColorBrush(AccentColor), Stroke = Brushes.White, StrokeThickness = 1.5 };
+        Canvas.SetLeft(dot, x - 4);
+        Canvas.SetTop(dot, y - 4);
+        TrendHoverCanvas.Children.Add(dot);
+
+        var text = new TextBlock { Text = $"{date:yyyy-MM-dd}  {count:N0} 次", Foreground = new SolidColorBrush(Color.FromRgb(101, 86, 127)), FontSize = 11 };
+        var tooltip = new Border { Padding = new Thickness(7, 4, 7, 4), CornerRadius = new CornerRadius(6), Background = new SolidColorBrush(Color.FromRgb(252, 250, 255)), BorderBrush = new SolidColorBrush(Color.FromRgb(205, 191, 224)), BorderThickness = new Thickness(1), Child = text };
+        tooltip.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+        var left = Math.Clamp(x + 8, 2, Math.Max(2, width - tooltip.DesiredSize.Width - 2));
+        var top = Math.Clamp(y - tooltip.DesiredSize.Height - 8, 2, Math.Max(2, height - tooltip.DesiredSize.Height - 2));
+        Canvas.SetLeft(tooltip, left);
+        Canvas.SetTop(tooltip, top);
+        TrendHoverCanvas.Children.Add(tooltip);
+    }
+
+    private void TrendMouseLeave(object sender, MouseEventArgs e) => TrendHoverCanvas.Children.Clear();
 
     private void RangeChanged(object sender, SelectionChangedEventArgs e)
     {
@@ -298,38 +661,27 @@ public partial class KeyboardStatisticsWindow : Window
         };
     }
 
-    private void BuildKeyboard()
+    private void BuildKeyboard(KeyboardLayoutDefinition layout)
     {
-        KeyboardGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(15 * KeyWidth) });
-        KeyboardGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(7) });
-        KeyboardGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(3 * KeyWidth) });
-        KeyboardGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(7) });
-        KeyboardGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(4 * KeyWidth) });
+        KeyboardGrid.Children.Clear();
+        KeyboardGrid.ColumnDefinitions.Clear();
+        _keyViews.Clear();
 
-        AddSection(0,
-            [K("Esc",27), S(1), K("F1",112),K("F2",113),K("F3",114),K("F4",115),S(.5),K("F5",116),K("F6",117),K("F7",118),K("F8",119),S(.5),K("F9",120),K("F10",121),K("F11",122),K("F12",123)],
-            [K("`",192),K("1",49),K("2",50),K("3",51),K("4",52),K("5",53),K("6",54),K("7",55),K("8",56),K("9",57),K("0",48),K("-",189),K("=",187),K("Back",8,2)],
-            [K("Tab",9,1.5),K("Q",81),K("W",87),K("E",69),K("R",82),K("T",84),K("Y",89),K("U",85),K("I",73),K("O",79),K("P",80),K("[",219),K("]",221),K("\\",220,1.5)],
-            [K("Caps",20,1.8),K("A",65),K("S",83),K("D",68),K("F",70),K("G",71),K("H",72),K("J",74),K("K",75),K("L",76),K(";",186),K("'",222),K("Enter",13,2.2)],
-            [K("Shift",160,2.3),K("Z",90),K("X",88),K("C",67),K("V",86),K("B",66),K("N",78),K("M",77),K(",",188),K(".",190),K("/",191),K("Shift",161,2.7)],
-            [K("Ctrl",162,1.4),K("Win",91,1.2),K("Alt",164,1.2),K("Space",32,6.2),K("Alt",165,1.2),K("Win",92,1.2),K("Menu",93,1.2),K("Ctrl",163,1.4)]);
-        AddSection(2,
-            [K("Prt",44),K("Scr",145),K("Pause",19)],
-            [K("Ins",45),K("Home",36),K("PgUp",33)],
-            [K("Del",46),K("End",35),K("PgDn",34)],
-            [S(3)],
-            [S(1),K("↑",38),S(1)],
-            [K("←",37),K("↓",40),K("→",39)]);
-        AddSection(4,
-            [S(4)],
-            [K("Num",144),K("/",111),K("*",106),K("-",109)],
-            [K("7",103),K("8",104),K("9",105),K("+",107)],
-            [K("4",100),K("5",101),K("6",102),S(1)],
-            [K("1",97),K("2",98),K("3",99),K("Enter",0x1000D)],
-            [K("0",96,2),K(".",110),S(1)]);
+        var column = 0;
+        foreach (var section in layout.Sections)
+        {
+            if (section.GapBefore > 0)
+            {
+                KeyboardGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(section.GapBefore) });
+                column++;
+            }
+            KeyboardGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(section.WidthInKeys * KeyWidth) });
+            AddSection(column, section.Rows);
+            column++;
+        }
     }
 
-    private void AddSection(int column, params KeySpec[][] rows)
+    private void AddSection(int column, IReadOnlyList<KeyboardKeySpec[]> rows)
     {
         var panel = new StackPanel();
         Grid.SetColumn(panel, column);
@@ -359,7 +711,4 @@ public partial class KeyboardStatisticsWindow : Window
         return new SolidColorBrush(Color.FromRgb((byte)(246 - 72 * ratio), (byte)(242 - 88 * ratio), (byte)(251 - 40 * ratio)));
     }
 
-    private static KeySpec K(string label, int keyCode, double width = 1) => new(label, keyCode, width);
-    private static KeySpec S(double width) => new(string.Empty, null, width);
-    private sealed record KeySpec(string Label, int? KeyCode, double Width);
 }

@@ -39,6 +39,7 @@ public partial class MainWindow : Window
     public HotkeyGesture? KeyboardStatisticsHotkey { get; private set; }
     public HotkeyGesture? MouseStatisticsHotkey { get; private set; }
     public bool[] MouseLegendHidden { get; private set; } = [false, false, false, false];
+    public string KeyboardLayoutId { get; private set; } = "full-size-104";
 
     public MainWindow(PetStateMachine stateMachine, PetImageStatePresenter imagePresenter, PetWindowPlacementStore placementStore)
     {
@@ -277,6 +278,7 @@ public partial class MainWindow : Window
             KeyboardStatisticsHotkey = placement.KeyboardStatisticsHotkey;
             MouseStatisticsHotkey = placement.MouseStatisticsHotkey;
             if (placement.MouseLegendHidden is { Length: 4 } legendHidden) MouseLegendHidden = legendHidden;
+            KeyboardLayoutId = placement.KeyboardLayoutId;
             SetPetTopmost(placement.Topmost);
         }
 
@@ -313,6 +315,12 @@ public partial class MainWindow : Window
         SavePlacement();
     }
 
+    public void SetKeyboardLayout(string layoutId)
+    {
+        KeyboardLayoutId = layoutId;
+        SavePlacement();
+    }
+
     public void SetCompanionWindowVisible(bool visible)
     {
         _isFeatureFlyoutVisible = visible;
@@ -328,7 +336,8 @@ public partial class MainWindow : Window
         ToggleVisibilityHotkey,
         KeyboardStatisticsHotkey,
         MouseStatisticsHotkey,
-        MouseLegendHidden);
+        MouseLegendHidden,
+        KeyboardLayoutId);
 
     private void KeepWindowVisible()
     {

@@ -15,6 +15,7 @@
             </Grid.RowDefinitions>
             <Grid>
                 <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
@@ -22,7 +23,12 @@
                     <TextBlock VerticalAlignment="Center" FontSize="17" FontWeight="SemiBold" Foreground="#65567F" Text="键盘统计"/>
                     <TextBlock x:Name="TotalCountText" Margin="10,0,0,0" VerticalAlignment="Center" Foreground="#897F96"/>
                 </StackPanel>
-                <StackPanel Grid.Column="1" Orientation="Horizontal">
+                <StackPanel Grid.Column="1" Margin="12,0" HorizontalAlignment="Center" Orientation="Horizontal">
+                    <Button x:Name="DistributionViewButton" MinWidth="72" Padding="9,5" Content="按键分布" Click="ShowDistributionView"/>
+                    <Button x:Name="TrendViewButton" MinWidth="72" Margin="4,0,0,0" Padding="9,5" Content="每日趋势" Click="ShowTrendView"/>
+                </StackPanel>
+                <StackPanel Grid.Column="2" Orientation="Horizontal">
+                    <ComboBox x:Name="LayoutBox" Width="76" Margin="0,0,6,0" DisplayMemberPath="DisplayName" SelectionChanged="LayoutChanged"/>
                     <ComboBox x:Name="RangeBox" Width="88" SelectionChanged="RangeChanged">
                         <ComboBoxItem Content="不限时间"/>
                         <ComboBoxItem Content="当天"/>
@@ -41,7 +47,15 @@
                     </Popup>
                 </StackPanel>
             </Grid>
-            <Grid x:Name="KeyboardGrid" Grid.Row="1" Margin="0,7,0,0" VerticalAlignment="Center"/>
+            <Grid Grid.Row="1" Margin="0,7,0,0">
+                <Grid x:Name="KeyboardGrid" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                <Border x:Name="TrendHost" Visibility="Collapsed" CornerRadius="10" Background="#F8F4FB" BorderBrush="#DED4EA" BorderThickness="1" SizeChanged="TrendHostSizeChanged">
+                    <Grid>
+                        <Canvas x:Name="TrendCanvas" ClipToBounds="True" IsHitTestVisible="False"/>
+                        <Canvas x:Name="TrendHoverCanvas" Background="Transparent" ClipToBounds="True" MouseMove="TrendMouseMove" MouseLeave="TrendMouseLeave"/>
+                    </Grid>
+                </Border>
+            </Grid>
         </Grid>
     </Border>
 </Window>

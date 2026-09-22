@@ -530,6 +530,20 @@ public sealed class DesktopPetRepository(string databasePath)
         return results;
     }
 
+    public IReadOnlyDictionary<DateOnly, long> GetKeyboardDailyTotals(DateOnly? startDate, DateOnly? endDate)
+    {
+        using var connection = OpenConnection();
+        using var command = connection.CreateCommand();
+        var filters = new List<string>();
+        if (startDate is not null) { filters.Add("stat_date >= $startDate"); command.Parameters.AddWithValue("$startDate", startDate.Value.ToString("yyyy-MM-dd")); }
+        if (endDate is not null) { filters.Add("stat_date <= $endDate"); command.Parameters.AddWithValue("$endDate", endDate.Value.ToString("yyyy-MM-dd")); }
+        command.CommandText = $"SELECT stat_date, SUM(press_count) FROM keyboard_statistics{(filters.Count == 0 ? "" : " WHERE " + string.Join(" AND ", filters))} GROUP BY stat_date ORDER BY stat_date;";
+        using var reader = command.ExecuteReader();
+        var results = new Dictionary<DateOnly, long>();
+        while (reader.Read() && DateOnly.TryParse(reader.GetString(0), out var date)) results[date] = reader.GetInt64(1);
+        return results;
+    }
+
     public IReadOnlyList<DateOnly> GetKeyboardStatisticDates()
     {
         using var connection = OpenConnection();

@@ -245,7 +245,11 @@ public partial class App : System.Windows.Application
         _mouseStatisticsWindow?.Hide();
         if (_keyboardStatisticsWindow is null)
         {
-            _keyboardStatisticsWindow = new KeyboardStatisticsWindow(_repository, _keyboardStatisticsService) { Owner = _petWindow };
+            _keyboardStatisticsWindow = new KeyboardStatisticsWindow(
+                _repository,
+                _keyboardStatisticsService,
+                _petWindow.KeyboardLayoutId,
+                _petWindow.SetKeyboardLayout) { Owner = _petWindow };
             _keyboardStatisticsWindow.Closed += (_, _) => _keyboardStatisticsWindow = null;
         }
         _keyboardStatisticsWindow.Left = _petWindow.Left - _keyboardStatisticsWindow.Width - 12;

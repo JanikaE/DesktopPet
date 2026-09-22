@@ -18,7 +18,8 @@ public sealed class PetWindowPlacementStore(string path)
                 settings.Hotkey,
                 settings.KeyboardStatisticsHotkey,
                 settings.MouseStatisticsHotkey,
-                settings.MouseLegendHidden);
+                settings.MouseLegendHidden,
+                settings.KeyboardLayoutId == "tkl-87" ? "tkl-87" : "full-size-104");
         }
         catch (JsonException)
         {
@@ -34,9 +35,10 @@ public sealed class PetWindowPlacementStore(string path)
         HotkeyGesture? hotkey,
         HotkeyGesture? keyboardStatisticsHotkey,
         HotkeyGesture? mouseStatisticsHotkey,
-        bool[]? mouseLegendHidden) => File.WriteAllText(
+        bool[]? mouseLegendHidden,
+        string keyboardLayoutId) => File.WriteAllText(
         path,
-        JsonSerializer.Serialize(new PetWindowSettings(left, top, width, topmost, hotkey, keyboardStatisticsHotkey, mouseStatisticsHotkey, mouseLegendHidden)));
+        JsonSerializer.Serialize(new PetWindowSettings(left, top, width, topmost, hotkey, keyboardStatisticsHotkey, mouseStatisticsHotkey, mouseLegendHidden, keyboardLayoutId)));
 }
 
 public sealed record PetWindowSettings(
@@ -47,7 +49,8 @@ public sealed record PetWindowSettings(
     HotkeyGesture? Hotkey,
     HotkeyGesture? KeyboardStatisticsHotkey,
     HotkeyGesture? MouseStatisticsHotkey,
-    bool[]? MouseLegendHidden);
+    bool[]? MouseLegendHidden,
+    string KeyboardLayoutId);
 
 internal sealed class PetWindowSettingsDto
 {
@@ -59,4 +62,5 @@ internal sealed class PetWindowSettingsDto
     public HotkeyGesture? KeyboardStatisticsHotkey { get; init; }
     public HotkeyGesture? MouseStatisticsHotkey { get; init; }
     public bool[]? MouseLegendHidden { get; init; }
+    public string? KeyboardLayoutId { get; init; }
 }
