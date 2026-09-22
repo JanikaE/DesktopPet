@@ -17,8 +17,10 @@ public partial class MouseStatisticsWindow : Window
 {
     private const double MaxMapWidth = 734;
     private const double HorizontalChrome = 28;
-    private const double DefaultChromeHeight = 88;
+    private const double DefaultChromeHeight = 98;
     private const double MinWindowWidth = 500;
+    private const double FixedWindowHeight = 384;
+    private const double PlotPadding = 4;
     private const int MaxTrailPoints = 45;
     private static readonly TimeSpan TrailDuration = TimeSpan.FromSeconds(1.8);
     private static readonly TimeSpan LiveRepaintInterval = TimeSpan.FromMilliseconds(400);
@@ -58,7 +60,6 @@ public partial class MouseStatisticsWindow : Window
     private int _referenceHeight = 1;
     private double _mapWidth = MaxMapWidth;
     private double _mapHeight = MaxMapWidth * 9 / 16;
-    private double _targetHeight = 384;
     private double _chromeHeight;
     private double _liveDistance;
     private int _lastLiveX;
@@ -92,23 +93,13 @@ public partial class MouseStatisticsWindow : Window
         RangeBox.SelectedIndex = 0;
     }
 
-    public double TargetHeight
-    {
-        get => _targetHeight;
-        set
-        {
-            _targetHeight = value;
-            if (!IsLoaded) return;
-            UpdateMapLayout();
-            RenderHeatmap();
-            RenderClickMarkers();
-        }
-    }
-
     private void OnLoaded(object sender, RoutedEventArgs e)
     {
-        var chrome = ActualHeight - MapHost.ActualHeight;
-        if (chrome > 0) _chromeHeight = chrome;
+        var mapRowHeight = StatisticsLayout.RowDefinitions[1].ActualHeight;
+        var availableMapHeight = mapRowHeight
+            - MapHost.Margin.Top - MapHost.Margin.Bottom
+            - MapHost.BorderThickness.Top - MapHost.BorderThickness.Bottom;
+        if (availableMapHeight > 0) _chromeHeight = FixedWindowHeight - availableMapHeight;
         SizeToContent = SizeToContent.Manual;
         UpdateMapLayout();
         RenderHeatmap();
@@ -197,7 +188,7 @@ public partial class MouseStatisticsWindow : Window
     {
         (_referenceWidth, _referenceHeight) = MouseGridGeometry.GetPrimaryScreenSize();
         var aspect = (double)_referenceWidth / _referenceHeight;
-        var availableHeight = Math.Max(120, _targetHeight - (_chromeHeight > 0 ? _chromeHeight : DefaultChromeHeight));
+        var availableHeight = Math.Max(120, FixedWindowHeight - (_chromeHeight > 0 ? _chromeHeight : DefaultChromeHeight));
         _mapHeight = availableHeight;
         _mapWidth = _mapHeight * aspect;
         if (_mapWidth > MaxMapWidth)
@@ -208,7 +199,7 @@ public partial class MouseStatisticsWindow : Window
         MapHost.Width = _mapWidth + 2;
         MapHost.Height = _mapHeight + 2;
         Width = Math.Max(MinWindowWidth, _mapWidth + HorizontalChrome);
-        if (SizeToContent == SizeToContent.Manual) Height = _targetHeight;
+        Height = FixedWindowHeight;
         var bitmapWidth = Math.Max(1, (int)Math.Round(_mapWidth));
         var bitmapHeight = Math.Max(1, (int)Math.Round(_mapHeight));
         if (_heatmap.PixelWidth != bitmapWidth || _heatmap.PixelHeight != bitmapHeight)
@@ -268,10 +259,10 @@ public partial class MouseStatisticsWindow : Window
 
         foreach (var (cell, count) in merged)
         {
-            var x0 = CellBoundary(cell.X, width, MouseGridGeometry.Columns);
-            var y0 = CellBoundary(cell.Y, height, MouseGridGeometry.Rows);
-            var x1 = CellBoundary(cell.X + 1, width, MouseGridGeometry.Columns);
-            var y1 = CellBoundary(cell.Y + 1, height, MouseGridGeometry.Rows);
+            var x0 = PlotBoundary(cell.X, width, MouseGridGeometry.Columns);
+            var y0 = PlotBoundary(cell.Y, height, MouseGridGeometry.Rows);
+            var x1 = PlotBoundary(cell.X + 1, width, MouseGridGeometry.Columns);
+            var y1 = PlotBoundary(cell.Y + 1, height, MouseGridGeometry.Rows);
             if (x0 < 0) x0 = 0;
             if (y0 < 0) y0 = 0;
             if (x1 > width) x1 = width;
@@ -449,24 +440,29 @@ public partial class MouseStatisticsWindow : Window
         return meters >= 1000 ? $"{meters / 1000:0.00} km" : $"{meters:0.0} m";
     }
 
-    private static int CellBoundary(int index, int pixels, int cells)
+    private static int PlotBoundary(int index, int pixels, int cells)
     {
-        var boundary = (int)Math.Round((double)index * pixels / cells);
+        var plotSize = Math.Max(1, pixels - 2 * PlotPadding);
+        var boundary = (int)Math.Round(PlotPadding + index * plotSize / cells);
         return Math.Clamp(boundary, 0, pixels);
     }
 
     private static (int X, int Y) ToCell(int x, int y) => MouseGridGeometry.ToCell(x, y);
 
     private Point CellCenter((int X, int Y) cell) => new(
-        (cell.X + 0.5) * _mapWidth / MouseGridGeometry.Columns,
-        (cell.Y + 0.5) * _mapHeight / MouseGridGeometry.Rows);
+        PlotPadding + (cell.X + 0.5) * Math.Max(1, _mapWidth - 2 * PlotPadding) / MouseGridGeometry.Columns,
+        PlotPadding + (cell.Y + 0.5) * Math.Max(1, _mapHeight - 2 * PlotPadding) / MouseGridGeometry.Rows);
 
     private Point MapPoint(int x, int y)
     {
         var (left, top, width, height) = MouseGridGeometry.GetMonitorBounds(x, y);
         var normalizedX = Math.Clamp((x - (double)left) / Math.Max(1, width), 0, 1);
         var normalizedY = Math.Clamp((y - (double)top) / Math.Max(1, height), 0, 1);
-        return new Point(normalizedX * _mapWidth, normalizedY * _mapHeight);
+        var plotWidth = Math.Max(1, _mapWidth - 2 * PlotPadding);
+        var plotHeight = Math.Max(1, _mapHeight - 2 * PlotPadding);
+        return new Point(
+            PlotPadding + normalizedX * plotWidth,
+            PlotPadding + normalizedY * plotHeight);
     }
 
     private void RangeChanged(object sender, SelectionChangedEventArgs e)

@@ -41,7 +41,7 @@
                     </Popup>
                 </StackPanel>
             </Grid>
-            <Grid x:Name="KeyboardGrid" Grid.Row="1" Margin="0,7,0,0"/>
+            <Grid x:Name="KeyboardGrid" Grid.Row="1" Margin="0,7,0,0" VerticalAlignment="Center"/>
         </Grid>
     </Border>
 </Window>

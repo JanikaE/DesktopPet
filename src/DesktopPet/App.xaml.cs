@@ -16,6 +16,7 @@ public partial class App : System.Windows.Application
     private const int VisibilityHotkeyId = 0x4450;
     private const int KeyboardStatisticsHotkeyId = 0x4451;
     private const int MouseStatisticsHotkeyId = 0x4452;
+    private const double CompanionWindowHeight = 384;
     private Forms.NotifyIcon? _trayIcon;
     private MainWindow? _petWindow;
     private SettingsWindow? _settingsWindow;
@@ -117,7 +118,8 @@ public partial class App : System.Windows.Application
             {
                 Dispatcher.BeginInvoke(ActivateExistingPet);
             }
-        }) { IsBackground = true };
+        })
+        { IsBackground = true };
         listener.Start();
         return true;
     }
@@ -229,7 +231,7 @@ public partial class App : System.Windows.Application
             _quickAccessWindow.Owner = _petWindow;
             _quickAccessWindow.Closed += (_, _) => _quickAccessWindow = null;
         }
-        _quickAccessWindow.Height = 384;
+        _quickAccessWindow.Height = CompanionWindowHeight;
         _quickAccessWindow.Left = _petWindow.Left - _quickAccessWindow.Width - 12;
         _quickAccessWindow.Top = _petWindow.Top + _petWindow.Height - _quickAccessWindow.Height;
         _quickAccessWindow.Refresh();
@@ -247,7 +249,7 @@ public partial class App : System.Windows.Application
             _keyboardStatisticsWindow.Closed += (_, _) => _keyboardStatisticsWindow = null;
         }
         _keyboardStatisticsWindow.Left = _petWindow.Left - _keyboardStatisticsWindow.Width - 12;
-        _keyboardStatisticsWindow.Top = _petWindow.Top;
+        _keyboardStatisticsWindow.Top = _petWindow.Top + _petWindow.Height - _keyboardStatisticsWindow.Height;
         _keyboardStatisticsWindow.RefreshStatistics();
         _petWindow.SetCompanionWindowVisible(true);
         if (!_keyboardStatisticsWindow.IsVisible) _keyboardStatisticsWindow.Show();
@@ -264,8 +266,8 @@ public partial class App : System.Windows.Application
             _mouseStatisticsWindow = new MouseStatisticsWindow(_repository, _mouseStatisticsService, _petWindow.MouseLegendHidden, _petWindow.SetMouseLegendHidden) { Owner = _petWindow };
             _mouseStatisticsWindow.Closed += (_, _) => _mouseStatisticsWindow = null;
         }
-        _mouseStatisticsWindow.TargetHeight = _petWindow.Height;
-        _mouseStatisticsWindow.Top = _petWindow.Top;
+        _mouseStatisticsWindow.Height = CompanionWindowHeight;
+        _mouseStatisticsWindow.Top = _petWindow.Top + _petWindow.Height - _mouseStatisticsWindow.Height;
         _mouseStatisticsWindow.RefreshStatistics();
         _petWindow.SetCompanionWindowVisible(true);
         if (!_mouseStatisticsWindow.IsVisible) _mouseStatisticsWindow.Show();
@@ -307,12 +309,12 @@ public partial class App : System.Windows.Application
         if (_keyboardStatisticsWindow is { IsVisible: true })
         {
             _keyboardStatisticsWindow.Left = _petWindow.Left - _keyboardStatisticsWindow.Width - 12;
-            _keyboardStatisticsWindow.Top = _petWindow.Top;
+            _keyboardStatisticsWindow.Top = _petWindow.Top + _petWindow.Height - _keyboardStatisticsWindow.Height;
         }
         if (_mouseStatisticsWindow is { IsVisible: true })
         {
             _mouseStatisticsWindow.Left = _petWindow.Left - _mouseStatisticsWindow.Width - 12;
-            _mouseStatisticsWindow.Top = _petWindow.Top;
+            _mouseStatisticsWindow.Top = _petWindow.Top + _petWindow.Height - _mouseStatisticsWindow.Height;
         }
     }
 }
