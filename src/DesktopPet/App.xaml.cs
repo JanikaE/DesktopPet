@@ -22,8 +22,6 @@ public partial class App : System.Windows.Application
     private QuickAccessWindow? _quickAccessWindow;
     private KeyboardStatisticsWindow? _keyboardStatisticsWindow;
     private MouseStatisticsWindow? _mouseStatisticsWindow;
-    private double _quickAccessOffsetLeft;
-    private double _quickAccessOffsetTop;
     private DesktopPetRepository? _repository;
     private OneDriveSyncService? _oneDriveSyncService;
     private System.Threading.Mutex? _instanceMutex;
@@ -62,6 +60,7 @@ public partial class App : System.Windows.Application
             new PetWindowPlacementStore(AppPaths.WindowPlacementPath));
         _petWindow.Closed += (_, _) => Shutdown();
         _petWindow.LocationChanged += (_, _) => MoveCompanionWindowsWithPet();
+        _petWindow.SizeChanged += (_, _) => MoveCompanionWindowsWithPet();
         _petWindow.MonitorDpiChanged += (_, _) => Dispatcher.BeginInvoke(MoveCompanionWindowsWithPet);
         _petWindow.SettingsRequested += (_, _) => ShowSettings();
         _petWindow.KeyboardStatisticsRequested += (_, _) => ShowKeyboardStatistics();
@@ -230,11 +229,9 @@ public partial class App : System.Windows.Application
             _quickAccessWindow.Owner = _petWindow;
             _quickAccessWindow.Closed += (_, _) => _quickAccessWindow = null;
         }
-        _quickAccessWindow.Height = _petWindow.Height;
+        _quickAccessWindow.Height = 384;
         _quickAccessWindow.Left = _petWindow.Left - _quickAccessWindow.Width - 12;
-        _quickAccessWindow.Top = _petWindow.Top;
-        _quickAccessOffsetLeft = _quickAccessWindow.Left - _petWindow.Left;
-        _quickAccessOffsetTop = _quickAccessWindow.Top - _petWindow.Top;
+        _quickAccessWindow.Top = _petWindow.Top + _petWindow.Height - _quickAccessWindow.Height;
         _quickAccessWindow.Refresh();
         _quickAccessWindow.Show();
     }
@@ -304,8 +301,8 @@ public partial class App : System.Windows.Application
         if (_petWindow is null) return;
         if (_quickAccessWindow is { IsVisible: true })
         {
-            _quickAccessWindow.Left = _petWindow.Left + _quickAccessOffsetLeft;
-            _quickAccessWindow.Top = _petWindow.Top + _quickAccessOffsetTop;
+            _quickAccessWindow.Left = _petWindow.Left - _quickAccessWindow.Width - 12;
+            _quickAccessWindow.Top = _petWindow.Top + _petWindow.Height - _quickAccessWindow.Height;
         }
         if (_keyboardStatisticsWindow is { IsVisible: true })
         {

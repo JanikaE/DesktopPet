@@ -3,6 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="DesktopPet"
         Width="256" Height="384"
+        MinWidth="96" MinHeight="144"
         WindowStyle="None"
         AllowsTransparency="True"
         Background="Transparent"
@@ -11,14 +12,39 @@
         ResizeMode="NoResize"
         UseLayoutRounding="True"
         SnapsToDevicePixels="True">
-  <Grid MouseLeftButtonDown="PetMouseLeftButtonDown"
+  <Grid x:Name="PetRoot"
+        PreviewMouseDown="PetPreviewMouseDown"
+        PreviewMouseMove="ResizeMouseMoved"
+        PreviewMouseLeftButtonUp="ResizeMouseLeftButtonUp"
+        LostMouseCapture="ResizeMouseCaptureLost"
+        MouseLeftButtonDown="PetMouseLeftButtonDown"
         MouseLeftButtonUp="PetMouseLeftButtonUp"
         MouseMove="PetMouseMove"
         MouseRightButtonUp="PetMouseRightButtonUp">
     <Image x:Name="PetImage" Stretch="Uniform" SnapsToDevicePixels="True" />
+    <Grid x:Name="ResizeAdorner" Visibility="Collapsed">
+      <Border Margin="2" BorderBrush="#FFB06BEA" BorderThickness="2" CornerRadius="3" IsHitTestVisible="False" />
+      <Thumb Tag="Top" Height="12" Margin="14,0" VerticalAlignment="Top" Cursor="SizeNS" Background="Transparent"
+             PreviewMouseLeftButtonDown="ResizeStarted" />
+      <Thumb Tag="Bottom" Height="12" Margin="14,0" VerticalAlignment="Bottom" Cursor="SizeNS" Background="Transparent"
+             PreviewMouseLeftButtonDown="ResizeStarted" />
+      <Thumb Tag="Left" Width="12" Margin="0,14" HorizontalAlignment="Left" Cursor="SizeWE" Background="Transparent"
+             PreviewMouseLeftButtonDown="ResizeStarted" />
+      <Thumb Tag="Right" Width="12" Margin="0,14" HorizontalAlignment="Right" Cursor="SizeWE" Background="Transparent"
+             PreviewMouseLeftButtonDown="ResizeStarted" />
+      <Thumb Tag="TopLeft" Width="20" Height="20" HorizontalAlignment="Left" VerticalAlignment="Top" Cursor="SizeNWSE" Background="Transparent"
+             PreviewMouseLeftButtonDown="ResizeStarted" />
+      <Thumb Tag="TopRight" Width="20" Height="20" HorizontalAlignment="Right" VerticalAlignment="Top" Cursor="SizeNESW" Background="Transparent"
+             PreviewMouseLeftButtonDown="ResizeStarted" />
+      <Thumb Tag="BottomLeft" Width="20" Height="20" HorizontalAlignment="Left" VerticalAlignment="Bottom" Cursor="SizeNESW" Background="Transparent"
+             PreviewMouseLeftButtonDown="ResizeStarted" />
+      <Thumb Tag="BottomRight" Width="20" Height="20" HorizontalAlignment="Right" VerticalAlignment="Bottom" Cursor="SizeNWSE" Background="Transparent"
+             PreviewMouseLeftButtonDown="ResizeStarted" />
+    </Grid>
     <Grid.ContextMenu>
       <ContextMenu>
         <MenuItem x:Name="TopmostMenuItem" Header="置顶" IsCheckable="True" IsChecked="True" Click="ToggleTopmost" />
+        <MenuItem x:Name="ResizeMenuItem" Header="缩放大小" IsCheckable="True" Click="ToggleResizeMode" />
         <MenuItem Header="键盘统计" Click="OpenKeyboardStatistics" />
         <MenuItem Header="鼠标统计" Click="OpenMouseStatistics" />
         <MenuItem Header="设置" Click="OpenSettings" />

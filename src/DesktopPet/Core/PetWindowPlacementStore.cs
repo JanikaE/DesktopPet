@@ -13,6 +13,7 @@ public sealed class PetWindowPlacementStore(string path)
             return settings is null ? null : new PetWindowSettings(
                 settings.Left,
                 settings.Top,
+                settings.Width is > 0 and < double.PositiveInfinity ? settings.Width.Value : 256,
                 settings.Topmost ?? true,
                 settings.Hotkey,
                 settings.KeyboardStatisticsHotkey,
@@ -28,18 +29,20 @@ public sealed class PetWindowPlacementStore(string path)
     public void Save(
         double left,
         double top,
+        double width,
         bool topmost,
         HotkeyGesture? hotkey,
         HotkeyGesture? keyboardStatisticsHotkey,
         HotkeyGesture? mouseStatisticsHotkey,
         bool[]? mouseLegendHidden) => File.WriteAllText(
         path,
-        JsonSerializer.Serialize(new PetWindowSettings(left, top, topmost, hotkey, keyboardStatisticsHotkey, mouseStatisticsHotkey, mouseLegendHidden)));
+        JsonSerializer.Serialize(new PetWindowSettings(left, top, width, topmost, hotkey, keyboardStatisticsHotkey, mouseStatisticsHotkey, mouseLegendHidden)));
 }
 
 public sealed record PetWindowSettings(
     double Left,
     double Top,
+    double Width,
     bool Topmost,
     HotkeyGesture? Hotkey,
     HotkeyGesture? KeyboardStatisticsHotkey,
@@ -50,6 +53,7 @@ internal sealed class PetWindowSettingsDto
 {
     public double Left { get; init; }
     public double Top { get; init; }
+    public double? Width { get; init; }
     public bool? Topmost { get; init; }
     public HotkeyGesture? Hotkey { get; init; }
     public HotkeyGesture? KeyboardStatisticsHotkey { get; init; }
