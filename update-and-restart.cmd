@@ -5,75 +5,57 @@ title DesktopPet Updater
 cd /d "%~dp0"
 
 set "PROJECT_FILE=%~dp0src\DesktopPet\DesktopPet.csproj"
-set "OUTPUT_ROOT=%~dp0src\DesktopPet\bin\AutoUpdate"
+set "APP_EXE=%~dp0src\DesktopPet\bin\Release\net8.0-windows\DesktopPet.exe"
 set "PROCESS_NAME=DesktopPet.exe"
+set "PULL_FAILED=0"
+set "BUILD_FAILED=0"
 
 echo [1/4] Checking the repository...
 where git >nul 2>&1
 if errorlevel 1 goto :git_missing
 
-where dotnet >nul 2>&1
-if errorlevel 1 goto :dotnet_missing
-
-for /f "delims=" %%I in ('git rev-parse HEAD 2^>nul') do set "OLD_COMMIT=%%I"
-if not defined OLD_COMMIT goto :not_a_repository
+git rev-parse --is-inside-work-tree >nul 2>&1
+if errorlevel 1 goto :not_a_repository
 
 echo [2/4] Pulling the latest code...
 git pull --ff-only
-if errorlevel 1 goto :pull_failed
-
-for /f "delims=" %%I in ('git rev-parse HEAD 2^>nul') do set "NEW_COMMIT=%%I"
-if not defined NEW_COMMIT goto :pull_failed
-
-set "BUILD_DIR=%OUTPUT_ROOT%\%NEW_COMMIT%"
-set "RETRY_MARKER=%BUILD_DIR%\.retry-required"
-set "RESTART_MARKER=%BUILD_DIR%\.restart-required"
-
-if /i not "%OLD_COMMIT%"=="%NEW_COMMIT%" goto :build
-if exist "%RETRY_MARKER%" (
-    echo A previous build of this update did not finish. Retrying...
-    goto :build
-)
-if exist "%RESTART_MARKER%" (
-    echo A previous restart did not finish. Retrying...
-    goto :restart
+if errorlevel 1 (
+    set "PULL_FAILED=1"
+    echo.
+    echo WARNING: Could not pull the latest code. The current local code will be built.
+    echo Local changes are not discarded by this script.
+    echo.
 )
 
-echo.
-echo Already up to date. No build or restart is needed.
-goto :success
-
-:build
-echo [3/4] Building the updated application...
-if exist "%BUILD_DIR%" rmdir /s /q "%BUILD_DIR%"
-mkdir "%BUILD_DIR%" 2>nul
-if errorlevel 1 goto :build_failed
->"%RETRY_MARKER%" echo This marker is removed after a successful build.
-
-rem A commit-specific output directory cannot be locked by the currently running app.
-dotnet build "%PROJECT_FILE%" --configuration Release --output "%BUILD_DIR%" --nologo
-if errorlevel 1 goto :build_failed
-
-if not exist "%BUILD_DIR%\DesktopPet.exe" goto :build_failed
-del /q "%RETRY_MARKER%" >nul 2>&1
->"%RESTART_MARKER%" echo This marker is removed after a successful restart.
-
-:restart
-echo [4/4] Restarting DesktopPet...
+echo [3/4] Stopping DesktopPet before building...
 call :stop_running_app
 if errorlevel 1 goto :stop_failed
 
-start "" "%BUILD_DIR%\DesktopPet.exe"
-if errorlevel 1 goto :start_failed
-del /q "%RESTART_MARKER%" >nul 2>&1
-
-rem Keep only the successfully launched build to avoid accumulating old versions.
-for /d %%D in ("%OUTPUT_ROOT%\*") do (
-    if /i not "%%~fD"=="%BUILD_DIR%" rmdir /s /q "%%~fD" >nul 2>&1
+echo Building DesktopPet in the default Release output directory...
+where dotnet >nul 2>&1
+if errorlevel 1 (
+    set "BUILD_FAILED=1"
+    echo ERROR: The .NET SDK was not found. The existing application will be started.
+) else (
+    dotnet build "%PROJECT_FILE%" --configuration Release --nologo
+    if errorlevel 1 set "BUILD_FAILED=1"
 )
 
+echo [4/4] Starting DesktopPet...
+start "" "%APP_EXE%"
+if errorlevel 1 goto :start_failed
+
 echo.
-echo Update completed and DesktopPet was restarted successfully.
+if "%BUILD_FAILED%"=="1" (
+    echo WARNING: The build failed, but DesktopPet was started from the existing Release output.
+) else (
+    echo DesktopPet was built and restarted successfully.
+)
+
+if "%PULL_FAILED%"=="1" echo WARNING: The latest code could not be pulled.
+
+if "%BUILD_FAILED%"=="1" goto :completed_with_errors
+if "%PULL_FAILED%"=="1" goto :completed_with_errors
 goto :success
 
 :stop_running_app
@@ -99,37 +81,26 @@ echo.
 echo ERROR: Git was not found. Install Git or add it to PATH.
 goto :failure
 
-:dotnet_missing
-echo.
-echo ERROR: The .NET SDK was not found. Install the .NET 8 SDK or add dotnet to PATH.
-goto :failure
-
 :not_a_repository
 echo.
 echo ERROR: This script must be run from the DesktopPet Git repository.
 goto :failure
 
-:pull_failed
-echo.
-echo ERROR: Could not pull the latest code.
-echo Check the message above. Local changes are not discarded by this script.
-goto :failure
-
-:build_failed
-echo.
-echo ERROR: The updated code could not be built.
-echo The currently running DesktopPet instance was left untouched.
-goto :failure
-
 :stop_failed
 echo.
-echo ERROR: DesktopPet could not be stopped. The new build was not started.
+echo ERROR: DesktopPet could not be stopped, so the build was not started.
 goto :failure
 
 :start_failed
 echo.
-echo ERROR: The new DesktopPet build could not be started.
+echo ERROR: DesktopPet could not be started from:
+echo %APP_EXE%
 goto :failure
+
+:completed_with_errors
+echo.
+pause
+exit /b 1
 
 :success
 echo.
