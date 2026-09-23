@@ -21,7 +21,7 @@
         MouseLeftButtonUp="PetMouseLeftButtonUp"
         MouseMove="PetMouseMove"
         MouseRightButtonUp="PetMouseRightButtonUp">
-    <Image x:Name="PetImage" Stretch="Uniform" SnapsToDevicePixels="True" />
+    <ContentControl x:Name="PetVisualHost" HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch" />
     <Grid x:Name="ResizeAdorner" Visibility="Collapsed">
       <Border Margin="2" BorderBrush="#FFB06BEA" BorderThickness="2" CornerRadius="3" IsHitTestVisible="False" />
       <Thumb Tag="Top" Height="12" Margin="14,0" VerticalAlignment="Top" Cursor="SizeNS" Background="Transparent"

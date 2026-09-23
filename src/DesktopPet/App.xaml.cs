@@ -36,6 +36,7 @@ public partial class App : System.Windows.Application
     private GlobalHotkey? _mouseStatisticsHotkey;
     private KeyboardStatisticsService? _keyboardStatisticsService;
     private MouseStatisticsService? _mouseStatisticsService;
+    private PetCatalog? _petCatalog;
 
     protected override void OnStartup(StartupEventArgs e)
     {
@@ -55,10 +56,10 @@ public partial class App : System.Windows.Application
         _keyboardStatisticsService = new KeyboardStatisticsService(_repository);
         _mouseStatisticsService = new MouseStatisticsService(_repository);
 
-        _petWindow = new MainWindow(
-            new PetStateMachine(),
-            new PetImageStatePresenter(Path.Combine(AppContext.BaseDirectory, "Assets", "Pet")),
-            new PetWindowPlacementStore(AppPaths.WindowPlacementPath));
+        var placementStore = new PetWindowPlacementStore(AppPaths.WindowPlacementPath);
+        _petCatalog = new PetCatalog(Path.Combine(AppContext.BaseDirectory, "Assets", "Pet"), AppPaths.PetPackagesDirectory);
+        var selectedPet = _petCatalog.FindOrDefault(placementStore.Load()?.SelectedPetId);
+        _petWindow = new MainWindow(new PetStateMachine(), selectedPet, placementStore);
         _petWindow.Closed += (_, _) => Shutdown();
         _petWindow.LocationChanged += (_, _) => MoveCompanionWindowsWithPet();
         _petWindow.SizeChanged += (_, _) => MoveCompanionWindowsWithPet();
@@ -174,6 +175,7 @@ public partial class App : System.Windows.Application
             _petWindow,
             _repository!,
             _oneDriveSyncService!,
+            _petCatalog!,
             SetVisibilityHotkey,
             SetKeyboardStatisticsHotkey,
             SetMouseStatisticsHotkey);

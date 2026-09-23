@@ -13,9 +13,9 @@ public partial class MainWindow : Window
 {
     private const double VisibleMargin = 72;
     private const double AspectRatio = 2.0 / 3.0;
-    private readonly PetImageStatePresenter _imagePresenter;
     private readonly PetStateMachine _stateMachine;
     private readonly PetWindowPlacementStore _placementStore;
+    private IPetRenderer _renderer;
     private System.Windows.Point _mouseDownPosition;
     private bool _isDragging;
     private bool _wasDragging;
@@ -40,15 +40,17 @@ public partial class MainWindow : Window
     public HotkeyGesture? MouseStatisticsHotkey { get; private set; }
     public bool[] MouseLegendHidden { get; private set; } = [false, false, false, false];
     public string KeyboardLayoutId { get; private set; } = "full-size-104";
+    public string SelectedPetId { get; private set; }
 
-    public MainWindow(PetStateMachine stateMachine, PetImageStatePresenter imagePresenter, PetWindowPlacementStore placementStore)
+    public MainWindow(PetStateMachine stateMachine, PetDefinition initialPet, PetWindowPlacementStore placementStore)
     {
         InitializeComponent();
         _stateMachine = stateMachine;
-        _imagePresenter = imagePresenter;
         _placementStore = placementStore;
-        _imagePresenter.ImageChanged += (_, image) => PetImage.Source = image;
-        _stateMachine.StateChanged += (_, state) => _imagePresenter.Show(state);
+        _renderer = PetRendererFactory.Create(initialPet);
+        SelectedPetId = initialPet.Id;
+        PetVisualHost.Content = _renderer.View;
+        _stateMachine.StateChanged += (_, state) => _renderer.Show(state);
         Loaded += OnLoaded;
         Closed += OnClosed;
         Deactivated += (_, _) =>
@@ -283,12 +285,13 @@ public partial class MainWindow : Window
         }
 
         KeepWindowVisible();
-        _imagePresenter.Show(PetState.Idle);
+        _renderer.Show(PetState.Idle);
     }
 
     private void OnClosed(object? sender, EventArgs e)
     {
         SavePlacement();
+        _renderer.Dispose();
     }
 
     public void SetToggleVisibilityHotkey(HotkeyGesture? hotkey)
@@ -321,6 +324,25 @@ public partial class MainWindow : Window
         SavePlacement();
     }
 
+    public bool TrySelectPet(PetDefinition pet)
+    {
+        IPetRenderer next;
+        try { next = PetRendererFactory.Create(pet); }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or NotSupportedException or InvalidOperationException or ArgumentException or System.Windows.Markup.XamlParseException)
+        {
+            return false;
+        }
+
+        next.Show(_stateMachine.Current);
+        var previous = _renderer;
+        _renderer = next;
+        PetVisualHost.Content = next.View;
+        SelectedPetId = pet.Id;
+        previous.Dispose();
+        SavePlacement();
+        return true;
+    }
+
     public void SetCompanionWindowVisible(bool visible)
     {
         _isFeatureFlyoutVisible = visible;
@@ -337,7 +359,8 @@ public partial class MainWindow : Window
         KeyboardStatisticsHotkey,
         MouseStatisticsHotkey,
         MouseLegendHidden,
-        KeyboardLayoutId);
+        KeyboardLayoutId,
+        SelectedPetId);
 
     private void KeepWindowVisible()
     {

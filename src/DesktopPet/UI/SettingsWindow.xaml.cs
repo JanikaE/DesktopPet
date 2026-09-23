@@ -1,12 +1,14 @@
 using DesktopPet.Core;
 using DesktopPet.Core.Sync;
 using DesktopPet.Data;
+using DesktopPet.Pet;
 using Microsoft.Win32;
 using System.Diagnostics;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using Forms = System.Windows.Forms;
 
 namespace DesktopPet.UI;
@@ -17,16 +19,19 @@ public partial class SettingsWindow : Window
     private readonly DesktopPetRepository _repository;
     private readonly OneDriveSyncService _oneDriveSyncService;
     private readonly LauncherDragDrop _launcherDragDrop;
+    private readonly PetCatalog _petCatalog;
     private readonly Func<HotkeyGesture?, bool> _setVisibilityHotkey;
     private readonly Func<HotkeyGesture?, bool> _setKeyboardStatisticsHotkey;
     private readonly Func<HotkeyGesture?, bool> _setMouseStatisticsHotkey;
     private bool _isLoading;
     private bool _launcherTabRequested;
+    private bool _isRefreshingPets;
 
     public SettingsWindow(
         MainWindow pet,
         DesktopPetRepository repository,
         OneDriveSyncService oneDriveSyncService,
+        PetCatalog petCatalog,
         Func<HotkeyGesture?, bool> setVisibilityHotkey,
         Func<HotkeyGesture?, bool> setKeyboardStatisticsHotkey,
         Func<HotkeyGesture?, bool> setMouseStatisticsHotkey)
@@ -44,6 +49,7 @@ public partial class SettingsWindow : Window
         _pet = pet;
         _repository = repository;
         _oneDriveSyncService = oneDriveSyncService;
+        _petCatalog = petCatalog;
         _setVisibilityHotkey = setVisibilityHotkey;
         _setKeyboardStatisticsHotkey = setKeyboardStatisticsHotkey;
         _setMouseStatisticsHotkey = setMouseStatisticsHotkey;
@@ -62,7 +68,103 @@ public partial class SettingsWindow : Window
         MouseStatisticsHotkeyBox.Text = pet.MouseStatisticsHotkey?.DisplayText ?? "未设置";
         _isLoading = false;
         RefreshLaunchers();
+        RefreshPets();
         RefreshTodoSyncState(_oneDriveSyncService.CurrentState);
+    }
+
+    private void RefreshPets()
+    {
+        _isRefreshingPets = true;
+        var items = _petCatalog.GetAll().Select(pet => new PetAppearanceItem(
+            pet,
+            LoadPetPreview(pet.IdleImagePath),
+            pet.IsBuiltIn ? "内置 PNG 预设" : $"自定义 PNG · {DescribeStates(pet)}")).ToArray();
+        PetAppearanceList.ItemsSource = items;
+        PetAppearanceList.SelectedItem = items.FirstOrDefault(item => item.Pet.Id == _pet.SelectedPetId)
+            ?? items.First(item => item.Pet.IsBuiltIn);
+        _isRefreshingPets = false;
+    }
+
+    private static string DescribeStates(PetDefinition pet)
+    {
+        var optional = new List<string>();
+        if (pet.StateImages.ContainsKey(PetState.Click)) optional.Add("Click");
+        if (pet.StateImages.ContainsKey(PetState.Dragging)) optional.Add("Dragging");
+        return optional.Count == 0 ? "仅 Idle" : $"Idle + {string.Join(" + ", optional)}";
+    }
+
+    private static BitmapImage LoadPetPreview(string path)
+    {
+        var image = new BitmapImage();
+        image.BeginInit();
+        image.CacheOption = BitmapCacheOption.OnLoad;
+        image.DecodePixelWidth = 140;
+        image.UriSource = new Uri(path, UriKind.Absolute);
+        image.EndInit();
+        image.Freeze();
+        return image;
+    }
+
+    private void PetAppearanceSelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_isRefreshingPets || PetAppearanceList.SelectedItem is not PetAppearanceItem item || item.Pet.Id == _pet.SelectedPetId) return;
+        if (_pet.TrySelectPet(item.Pet)) return;
+        MessageBox.Show(this, "无法加载所选桌宠，已保留当前桌宠。请检查宠物包图片是否完整。", "DesktopPet");
+        RefreshPets();
+    }
+
+    private void AddCustomPet(object sender, RoutedEventArgs e)
+    {
+        var editor = new PetEditorWindow { Owner = this };
+        if (editor.ShowDialog() != true) return;
+        try
+        {
+            var pet = _petCatalog.Import(editor.PetName, editor.IdlePath, editor.ClickPath, editor.DraggingPath);
+            if (!_pet.TrySelectPet(pet)) throw new InvalidDataException("图片已保存，但无法切换到新桌宠。");
+            RefreshPets();
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidOperationException)
+        {
+            MessageBox.Show(this, exception.Message, "无法添加自定义桌宠");
+            RefreshPets();
+        }
+    }
+
+    private void EditCustomPet(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is not PetAppearanceItem { Pet.IsBuiltIn: false } item) return;
+        var editor = new PetEditorWindow(item.Pet) { Owner = this };
+        if (editor.ShowDialog() != true) return;
+        try
+        {
+            var updated = _petCatalog.Update(item.Pet.Id, editor.PetName, editor.IdlePath, editor.ClickPath, editor.DraggingPath);
+            if (_pet.SelectedPetId == updated.Id && !_pet.TrySelectPet(updated)) throw new InvalidDataException("桌宠包已更新，但无法重新加载图片。");
+            RefreshPets();
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidOperationException)
+        {
+            MessageBox.Show(this, exception.Message, "无法编辑自定义桌宠");
+            RefreshPets();
+        }
+        e.Handled = true;
+    }
+
+    private void DeleteCustomPet(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is not PetAppearanceItem { Pet.IsBuiltIn: false } item) return;
+        if (MessageBox.Show(this, $"确定删除“{item.Pet.Name}”吗？此操作会删除应用保存的图片副本。", "删除自定义桌宠", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
+        try
+        {
+            if (_pet.SelectedPetId == item.Pet.Id && !_pet.TrySelectPet(_petCatalog.BuiltInDefault))
+                throw new InvalidOperationException("无法切换到默认桌宠，因此没有删除当前桌宠。");
+            _petCatalog.Delete(item.Pet.Id);
+            RefreshPets();
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidOperationException)
+        {
+            MessageBox.Show(this, exception.Message, "无法删除自定义桌宠");
+        }
+        e.Handled = true;
     }
 
     private void TopmostChanged(object sender, RoutedEventArgs e)
@@ -323,4 +425,10 @@ public partial class SettingsWindow : Window
     private void LauncherPreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e) => _launcherDragDrop.PreviewMouseLeftButtonDown(e);
     private void LauncherPreviewMouseMove(object sender, MouseEventArgs e) => _launcherDragDrop.PreviewMouseMove(e);
     private void LauncherDrop(object sender, DragEventArgs e) => _launcherDragDrop.Drop(e);
+
+    private sealed record PetAppearanceItem(PetDefinition Pet, BitmapImage Preview, string Description)
+    {
+        public string Name => Pet.Name;
+        public bool IsCustom => !Pet.IsBuiltIn;
+    }
 }
