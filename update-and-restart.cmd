@@ -5,7 +5,7 @@ title DesktopPet Updater
 cd /d "%~dp0"
 
 set "PROJECT_FILE=%~dp0src\DesktopPet\DesktopPet.csproj"
-set "APP_EXE=%~dp0src\DesktopPet\bin\Release\net8.0-windows\DesktopPet.exe"
+set "APP_EXE=%~dp0src\DesktopPet\bin\Debug\net8.0-windows\DesktopPet.exe"
 set "PROCESS_NAME=DesktopPet.exe"
 set "PULL_FAILED=0"
 set "BUILD_FAILED=0"
@@ -31,13 +31,13 @@ echo [3/4] Stopping DesktopPet before building...
 call :stop_running_app
 if errorlevel 1 goto :stop_failed
 
-echo Building DesktopPet in the default Release output directory...
+echo Building DesktopPet in the default Debug output directory...
 where dotnet >nul 2>&1
 if errorlevel 1 (
     set "BUILD_FAILED=1"
     echo ERROR: The .NET SDK was not found. The existing application will be started.
 ) else (
-    dotnet build "%PROJECT_FILE%" --configuration Release --nologo
+    dotnet build "%PROJECT_FILE%" --configuration Debug --nologo
     if errorlevel 1 set "BUILD_FAILED=1"
 )
 
@@ -47,7 +47,7 @@ if errorlevel 1 goto :start_failed
 
 echo.
 if "%BUILD_FAILED%"=="1" (
-    echo WARNING: The build failed, but DesktopPet was started from the existing Release output.
+    echo WARNING: The build failed, but DesktopPet was started from the existing Debug output.
 ) else (
     echo DesktopPet was built and restarted successfully.
 )
