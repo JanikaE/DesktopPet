@@ -23,7 +23,7 @@
                 <TextBlock VerticalAlignment="Center" FontSize="17" FontWeight="SemiBold" Foreground="#65567F" Text="鼠标统计"/>
                 <StackPanel Grid.Column="1" Margin="10,0,8,0" VerticalAlignment="Center">
                     <TextBlock x:Name="MoveText" Foreground="#897F96"/>
-                    <TextBlock x:Name="ClickText" Foreground="#897F96"/>
+                    <TextBlock x:Name="DoubleClickText" Foreground="#897F96"/>
                 </StackPanel>
                 <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
                     <ComboBox x:Name="RangeBox" Width="88" VerticalAlignment="Center" SelectionChanged="RangeChanged">
@@ -53,7 +53,6 @@
             </Border>
             <Grid Grid.Row="2" Margin="0,8,0,0">
                 <StackPanel x:Name="LegendPanel" Orientation="Horizontal" VerticalAlignment="Center"/>
-                <TextBlock x:Name="DetailText" HorizontalAlignment="Right" VerticalAlignment="Center" Foreground="#897F96"/>
             </Grid>
         </Grid>
     </Border>

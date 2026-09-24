@@ -103,7 +103,7 @@ public partial class KeyboardStatisticsWindow : Window
                 SetCountText(view, count);
             }
         }
-        TotalCountText.Text = $"合计 {DisplayTotal():N0} 次";
+        UpdateTotalCountText();
     }
 
     private void OnKeyPressed(object? sender, int keyCode)
@@ -119,7 +119,7 @@ public partial class KeyboardStatisticsWindow : Window
         if (!_liveRange) return;
 
         _liveIncrements[keyCode] = _liveIncrements.GetValueOrDefault(keyCode) + 1;
-        TotalCountText.Text = $"合计 {DisplayTotal():N0} 次";
+        UpdateTotalCountText();
         if (_showingTrend)
         {
             RequestTrendRender();
@@ -160,7 +160,18 @@ public partial class KeyboardStatisticsWindow : Window
 
     private long DisplayTotal() => _counts.Values.Sum() + _liveIncrements.Values.Sum();
 
-    private static void SetCountText(Border view, long count) => ((TextBlock)((StackPanel)view.Child).Children[1]).Text = count.ToString();
+    private void UpdateTotalCountText()
+    {
+        var total = DisplayTotal();
+        TotalCountText.Text = $"合计 {CompactCountFormatter.Format(total)} 次";
+        TotalCountText.ToolTip = $"合计 {total:N0} 次";
+    }
+
+    private static void SetCountText(Border view, long count)
+    {
+        ((TextBlock)((StackPanel)view.Child).Children[1]).Text = CompactCountFormatter.Format(count);
+        view.ToolTip = $"{count:N0} 次";
+    }
 
     private static void FlashKey(IReadOnlyList<Border> views)
     {
@@ -459,12 +470,7 @@ public partial class KeyboardStatisticsWindow : Window
         return (long)Math.Ceiling(maximum / step) * (long)step;
     }
 
-    private static string FormatAxisValue(long value) => value switch
-    {
-        >= 100_000_000 => $"{value / 100_000_000d:0.#}亿",
-        >= 10_000 => $"{value / 10_000d:0.#}万",
-        _ => value.ToString("N0")
-    };
+    private static string FormatAxisValue(long value) => CompactCountFormatter.Format(value);
 
     private double DateX(DateOnly date, double plotWidth)
     {

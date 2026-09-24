@@ -39,6 +39,7 @@ public partial class MouseStatisticsWindow : Window
     private readonly Action<bool[]> _saveLegendHidden;
     private readonly DispatcherTimer _liveRepaintTimer;
     private readonly StackPanel[] _legendEntries = new StackPanel[ButtonColors.Length];
+    private readonly TextBlock[] _legendLabels = new TextBlock[ButtonColors.Length];
     private readonly bool[] _visibleButtons;
     private readonly Dictionary<(int X, int Y), long> _moves = [];
     private readonly Dictionary<(int X, int Y, int Button), long> _clicks = [];
@@ -216,15 +217,17 @@ public partial class MouseStatisticsWindow : Window
         for (var index = 0; index < ButtonColors.Length; index++)
         {
             var dot = new Ellipse { Width = 10, Height = 10, Fill = new SolidColorBrush(ButtonColors[index]), VerticalAlignment = VerticalAlignment.Center };
-            var label = new TextBlock { Text = ButtonNames[index], Margin = new Thickness(5, 0, 12, 0), FontSize = 12, Foreground = new SolidColorBrush(Color.FromRgb(101, 86, 127)), VerticalAlignment = VerticalAlignment.Center };
-            var entry = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center, Cursor = Cursors.Hand, Tag = index, ToolTip = "点击隐藏 / 显示该颜色的圆点" };
+            var label = new TextBlock { Margin = new Thickness(5, 0, 0, 0), FontSize = 12, Foreground = new SolidColorBrush(Color.FromRgb(101, 86, 127)), VerticalAlignment = VerticalAlignment.Center };
+            var entry = new StackPanel { Width = 112, Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center, Cursor = Cursors.Hand, Tag = index, ToolTip = "点击隐藏 / 显示该颜色的圆点" };
             entry.Children.Add(dot);
             entry.Children.Add(label);
             entry.MouseLeftButtonUp += ToggleLegendButton;
             _legendEntries[index] = entry;
+            _legendLabels[index] = label;
             LegendPanel.Children.Add(entry);
             UpdateLegendEntry(index);
         }
+        UpdateLegendCounts();
     }
 
     private void ToggleLegendButton(object sender, MouseButtonEventArgs e)
@@ -425,13 +428,28 @@ public partial class MouseStatisticsWindow : Window
     private void UpdateTotalsText()
     {
         var distance = _totals.MoveDistance + _liveDistance;
-        var clicks = _totals.LeftClicks + _totals.RightClicks + _totals.MiddleClicks
-            + _liveTotals.LeftClicks + _liveTotals.RightClicks + _liveTotals.MiddleClicks;
         MoveText.Text = $"移动 {FormatDistance(distance)}";
-        ClickText.Text = $"点击 {clicks:N0} 次";
         var doubles = _totals.DoubleClicks + _liveTotals.DoubleClicks;
-        var wheel = _totals.WheelUnits + _liveTotals.WheelUnits;
-        DetailText.Text = $"双击 {doubles:N0} 次 · 滚轮 {wheel:N0} 格";
+        DoubleClickText.Text = $"双击 {doubles:N0} 次";
+        UpdateLegendCounts();
+    }
+
+    private void UpdateLegendCounts()
+    {
+        var counts = new[]
+        {
+            _totals.LeftClicks + _liveTotals.LeftClicks,
+            _totals.RightClicks + _liveTotals.RightClicks,
+            _totals.MiddleClicks + _liveTotals.MiddleClicks,
+            _totals.WheelUnits + _liveTotals.WheelUnits
+        };
+
+        for (var index = 0; index < _legendLabels.Length; index++)
+        {
+            var unit = index == (int)MouseButtonKind.Wheel ? "格" : "次";
+            _legendLabels[index].Text = $"{ButtonNames[index]}（{CompactCountFormatter.Format(counts[index])}{unit}）";
+            _legendEntries[index].ToolTip = $"{ButtonNames[index]}：{counts[index]:N0} {unit}\n点击隐藏 / 显示该颜色的圆点";
+        }
     }
 
     private static string FormatDistance(double pixels)

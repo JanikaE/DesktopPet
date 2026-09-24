@@ -62,15 +62,16 @@ goto :success
 tasklist /fi "IMAGENAME eq %PROCESS_NAME%" /nh 2>nul | find /i "%PROCESS_NAME%" >nul
 if errorlevel 1 exit /b 0
 
+rem Do not use /T here: this updater may be a child process launched by DesktopPet.
 rem First request a normal shutdown, then force termination only if it is still running.
-taskkill /im "%PROCESS_NAME%" /t >nul 2>&1
+taskkill /im "%PROCESS_NAME%" >nul 2>&1
 for /l %%I in (1,1,5) do (
     tasklist /fi "IMAGENAME eq %PROCESS_NAME%" /nh 2>nul | find /i "%PROCESS_NAME%" >nul
     if errorlevel 1 exit /b 0
     timeout /t 1 /nobreak >nul
 )
 
-taskkill /f /im "%PROCESS_NAME%" /t >nul 2>&1
+taskkill /f /im "%PROCESS_NAME%" >nul 2>&1
 timeout /t 1 /nobreak >nul
 tasklist /fi "IMAGENAME eq %PROCESS_NAME%" /nh 2>nul | find /i "%PROCESS_NAME%" >nul
 if errorlevel 1 exit /b 0
