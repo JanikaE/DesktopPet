@@ -1,0 +1,19 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "ES2020",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "baseUrl": ".",
+    "paths": {
+      "@framework/*": ["vendor/Framework/src/*"]
+    },
+    "strict": false,
+    "noImplicitAny": true,
+    "useUnknownInCatchVariables": true,
+    "skipLibCheck": true,
+    "rootDir": ".",
+    "outDir": "../DesktopPet/Assets/Live2D/Runtime/modules"
+  },
+  "include": ["src/**/*.ts", "vendor/Framework/src/**/*.ts", "vendor/Core/live2dcubismcore.d.ts"]
+}

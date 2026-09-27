@@ -1,5 +1,7 @@
 bin/
 obj/
+node_modules/
+.pnpm-store/
 .vs/
 *.user
 *.suo

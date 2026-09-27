@@ -6,6 +6,7 @@ using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
 using System.Runtime.InteropServices;
+using System.Threading.Tasks;
 
 namespace DesktopPet;
 
@@ -34,6 +35,7 @@ public partial class MainWindow : Window
     public event Action<bool>? FeatureFlyoutRequested;
     public event EventHandler? KeyboardStatisticsRequested;
     public event EventHandler? MouseStatisticsRequested;
+    public event Action<string>? RendererFailed;
     public bool IsPetTopmost => Topmost;
     public HotkeyGesture? ToggleVisibilityHotkey { get; private set; }
     public HotkeyGesture? KeyboardStatisticsHotkey { get; private set; }
@@ -48,6 +50,7 @@ public partial class MainWindow : Window
         _stateMachine = stateMachine;
         _placementStore = placementStore;
         _renderer = PetRendererFactory.Create(initialPet);
+        _renderer.Failed += OnRendererFailed;
         SelectedPetId = initialPet.Id;
         PetVisualHost.Content = _renderer.View;
         _stateMachine.StateChanged += (_, state) => _renderer.Show(state);
@@ -291,6 +294,7 @@ public partial class MainWindow : Window
     private void OnClosed(object? sender, EventArgs e)
     {
         SavePlacement();
+        _renderer.Failed -= OnRendererFailed;
         _renderer.Dispose();
     }
 
@@ -324,7 +328,7 @@ public partial class MainWindow : Window
         SavePlacement();
     }
 
-    public bool TrySelectPet(PetDefinition pet)
+    public async Task<bool> TrySelectPetAsync(PetDefinition pet)
     {
         IPetRenderer next;
         try { next = PetRendererFactory.Create(pet); }
@@ -333,15 +337,30 @@ public partial class MainWindow : Window
             return false;
         }
 
-        next.Show(_stateMachine.Current);
         var previous = _renderer;
-        _renderer = next;
+        next.Show(_stateMachine.Current);
         PetVisualHost.Content = next.View;
+        try
+        {
+            await next.Ready;
+        }
+        catch (Exception)
+        {
+            PetVisualHost.Content = previous.View;
+            next.Dispose();
+            return false;
+        }
+
+        _renderer = next;
+        next.Failed += OnRendererFailed;
         SelectedPetId = pet.Id;
+        previous.Failed -= OnRendererFailed;
         previous.Dispose();
         SavePlacement();
         return true;
     }
+
+    private void OnRendererFailed(string message) => Dispatcher.BeginInvoke(() => RendererFailed?.Invoke(message));
 
     public void SetCompanionWindowVisible(bool visible)
     {

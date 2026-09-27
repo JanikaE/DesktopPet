@@ -77,8 +77,8 @@ public partial class SettingsWindow : Window
         _isRefreshingPets = true;
         var items = _petCatalog.GetAll().Select(pet => new PetAppearanceItem(
             pet,
-            LoadPetPreview(pet.IdleImagePath),
-            pet.IsBuiltIn ? "内置 PNG 预设" : $"自定义 PNG · {DescribeStates(pet)}")).ToArray();
+            LoadPetPreview(pet.PreviewImagePath),
+            pet.IsBuiltIn ? "内置 PNG 预设" : pet.IsLive2D ? DescribeLive2D(pet) : $"自定义 PNG · {DescribeStates(pet)}")).ToArray();
         PetAppearanceList.ItemsSource = items;
         PetAppearanceList.SelectedItem = items.FirstOrDefault(item => item.Pet.Id == _pet.SelectedPetId)
             ?? items.First(item => item.Pet.IsBuiltIn);
@@ -93,8 +93,15 @@ public partial class SettingsWindow : Window
         return optional.Count == 0 ? "仅 Idle" : $"Idle + {string.Join(" + ", optional)}";
     }
 
-    private static BitmapImage LoadPetPreview(string path)
+    private static string DescribeLive2D(PetDefinition pet)
     {
+        var mapped = pet.Live2D?.Motions.Keys.Select(state => state.ToString()).ToArray() ?? [];
+        return mapped.Length == 0 ? "Live2D · 默认动作" : $"Live2D · {string.Join(" + ", mapped)}";
+    }
+
+    private static ImageSource? LoadPetPreview(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path)) return null;
         var image = new BitmapImage();
         image.BeginInit();
         image.CacheOption = BitmapCacheOption.OnLoad;
@@ -105,22 +112,31 @@ public partial class SettingsWindow : Window
         return image;
     }
 
-    private void PetAppearanceSelectionChanged(object sender, SelectionChangedEventArgs e)
+    private async void PetAppearanceSelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (_isRefreshingPets || PetAppearanceList.SelectedItem is not PetAppearanceItem item || item.Pet.Id == _pet.SelectedPetId) return;
-        if (_pet.TrySelectPet(item.Pet)) return;
-        MessageBox.Show(this, "无法加载所选桌宠，已保留当前桌宠。请检查宠物包图片是否完整。", "DesktopPet");
+        if (await _pet.TrySelectPetAsync(item.Pet)) return;
+        var message = item.Pet.IsLive2D
+            ? $"无法加载所选 Live2D 桌宠，已保留当前桌宠。\n\n{DescribeMissingLive2DRuntime()}"
+            : "无法加载所选桌宠，已保留当前桌宠。请检查宠物包图片是否完整。";
+        MessageBox.Show(this, message, "DesktopPet");
         RefreshPets();
     }
 
-    private void AddCustomPet(object sender, RoutedEventArgs e)
+    private static string DescribeMissingLive2DRuntime()
+    {
+        var missing = Live2DPetRenderer.GetMissingRuntimeFiles();
+        return missing.Count == 0 ? "请检查模型资源和 WebView2 Runtime。" : $"缺少运行文件：{string.Join("、", missing)}";
+    }
+
+    private async void AddCustomPet(object sender, RoutedEventArgs e)
     {
         var editor = new PetEditorWindow { Owner = this };
         if (editor.ShowDialog() != true) return;
         try
         {
             var pet = _petCatalog.Import(editor.PetName, editor.IdlePath, editor.ClickPath, editor.DraggingPath);
-            if (!_pet.TrySelectPet(pet)) throw new InvalidDataException("图片已保存，但无法切换到新桌宠。");
+            if (!await _pet.TrySelectPetAsync(pet)) throw new InvalidDataException("图片已保存，但无法切换到新桌宠。");
             RefreshPets();
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidOperationException)
@@ -130,15 +146,61 @@ public partial class SettingsWindow : Window
         }
     }
 
-    private void EditCustomPet(object sender, RoutedEventArgs e)
+    private async void AddLive2DPet(object sender, RoutedEventArgs e)
+    {
+        var editor = new Live2DImportWindow { Owner = this };
+        if (editor.ShowDialog() != true) return;
+        try
+        {
+            var pet = _petCatalog.ImportLive2D(
+                editor.PetName,
+                editor.ModelPath,
+                editor.ModelScale,
+                editor.OffsetX,
+                editor.OffsetY,
+                editor.IdleMotion,
+                editor.ClickMotion,
+                editor.DraggingMotion,
+                editor.PointerTracking);
+            RefreshPets();
+            if (!await _pet.TrySelectPetAsync(pet))
+                MessageBox.Show(this, "模型已经安全导入，但未能完成首帧加载。已保留当前桌宠，请检查模型资源、WebGL 和 WebView2 Runtime。", "Live2D 已导入");
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidOperationException or InvalidDataException or OverflowException)
+        {
+            MessageBox.Show(this, exception.Message, "无法导入 Live2D 桌宠");
+            RefreshPets();
+        }
+    }
+
+    private async void EditCustomPet(object sender, RoutedEventArgs e)
     {
         if ((sender as FrameworkElement)?.DataContext is not PetAppearanceItem { Pet.IsBuiltIn: false } item) return;
+        if (item.Pet.IsLive2D)
+        {
+            var trackingEditor = new Live2DPointerTrackingWindow(item.Pet.Live2D!.PointerTracking) { Owner = this };
+            if (trackingEditor.ShowDialog() != true) return;
+            try
+            {
+                var updated = _petCatalog.UpdateLive2DPointerTracking(item.Pet.Id, trackingEditor.PointerTracking);
+                if (_pet.SelectedPetId == updated.Id && !await _pet.TrySelectPetAsync(updated))
+                    throw new InvalidDataException("鼠标追踪设置已保存，但无法重新加载 Live2D 桌宠。");
+                RefreshPets();
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidOperationException or InvalidDataException)
+            {
+                MessageBox.Show(this, exception.Message, "无法保存鼠标追踪设置");
+                RefreshPets();
+            }
+            e.Handled = true;
+            return;
+        }
         var editor = new PetEditorWindow(item.Pet) { Owner = this };
         if (editor.ShowDialog() != true) return;
         try
         {
             var updated = _petCatalog.Update(item.Pet.Id, editor.PetName, editor.IdlePath, editor.ClickPath, editor.DraggingPath);
-            if (_pet.SelectedPetId == updated.Id && !_pet.TrySelectPet(updated)) throw new InvalidDataException("桌宠包已更新，但无法重新加载图片。");
+            if (_pet.SelectedPetId == updated.Id && !await _pet.TrySelectPetAsync(updated)) throw new InvalidDataException("桌宠包已更新，但无法重新加载图片。");
             RefreshPets();
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidOperationException)
@@ -149,13 +211,13 @@ public partial class SettingsWindow : Window
         e.Handled = true;
     }
 
-    private void DeleteCustomPet(object sender, RoutedEventArgs e)
+    private async void DeleteCustomPet(object sender, RoutedEventArgs e)
     {
         if ((sender as FrameworkElement)?.DataContext is not PetAppearanceItem { Pet.IsBuiltIn: false } item) return;
-        if (MessageBox.Show(this, $"确定删除“{item.Pet.Name}”吗？此操作会删除应用保存的图片副本。", "删除自定义桌宠", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
+        if (MessageBox.Show(this, $"确定删除“{item.Pet.Name}”吗？此操作会删除应用保存的{(item.Pet.IsLive2D ? "模型" : "图片")}副本。", "删除自定义桌宠", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
         try
         {
-            if (_pet.SelectedPetId == item.Pet.Id && !_pet.TrySelectPet(_petCatalog.BuiltInDefault))
+            if (_pet.SelectedPetId == item.Pet.Id && !await _pet.TrySelectPetAsync(_petCatalog.BuiltInDefault))
                 throw new InvalidOperationException("无法切换到默认桌宠，因此没有删除当前桌宠。");
             _petCatalog.Delete(item.Pet.Id);
             RefreshPets();
@@ -426,9 +488,10 @@ public partial class SettingsWindow : Window
     private void LauncherPreviewMouseMove(object sender, MouseEventArgs e) => _launcherDragDrop.PreviewMouseMove(e);
     private void LauncherDrop(object sender, DragEventArgs e) => _launcherDragDrop.Drop(e);
 
-    private sealed record PetAppearanceItem(PetDefinition Pet, BitmapImage Preview, string Description)
+    private sealed record PetAppearanceItem(PetDefinition Pet, ImageSource? Preview, string Description)
     {
         public string Name => Pet.Name;
         public bool IsCustom => !Pet.IsBuiltIn;
+        public override string ToString() => Name;
     }
 }

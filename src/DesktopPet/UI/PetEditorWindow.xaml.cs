@@ -28,7 +28,7 @@ public partial class PetEditorWindow : Window
             Title = "编辑自定义桌宠";
             TitleText.Text = "编辑自定义桌宠";
             NameBox.Text = pet.Name;
-            IdlePath = pet.IdleImagePath;
+            IdlePath = pet.IdleImagePath ?? string.Empty;
             ClickPath = pet.StateImages.GetValueOrDefault(PetState.Click);
             DraggingPath = pet.StateImages.GetValueOrDefault(PetState.Dragging);
         }

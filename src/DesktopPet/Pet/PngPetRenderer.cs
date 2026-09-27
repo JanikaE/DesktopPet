@@ -1,6 +1,7 @@
 using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using System.Threading.Tasks;
 
 namespace DesktopPet.Pet;
 
@@ -11,7 +12,7 @@ public sealed class PngPetRenderer : IPetRenderer
 
     public PngPetRenderer(PetDefinition definition)
     {
-        var idle = LoadImage(definition.IdleImagePath);
+        var idle = LoadImage(definition.IdleImagePath ?? throw new InvalidDataException("PNG 桌宠缺少 Idle 图片。"));
         var images = new Dictionary<PetState, BitmapImage> { [PetState.Idle] = idle };
         images[PetState.Click] = definition.StateImages.TryGetValue(PetState.Click, out var click) ? LoadImage(click) : idle;
         images[PetState.Dragging] = definition.StateImages.TryGetValue(PetState.Dragging, out var dragging) ? LoadImage(dragging) : idle;
@@ -20,6 +21,8 @@ public sealed class PngPetRenderer : IPetRenderer
     }
 
     public System.Windows.FrameworkElement View => _image;
+    public Task Ready => Task.CompletedTask;
+    public event Action<string>? Failed { add { } remove { } }
 
     public void Show(PetState state)
     {

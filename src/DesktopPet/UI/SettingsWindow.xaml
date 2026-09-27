@@ -50,9 +50,12 @@
                         <Grid>
                             <StackPanel>
                                 <TextBlock FontSize="16" FontWeight="SemiBold" Text="选择桌宠"/>
-                                <TextBlock Margin="0,6,120,0" Foreground="#6F667A" TextWrapping="Wrap" Text="点击项目即可立即切换。自定义 PNG 会复制到本地应用数据目录。"/>
+                                <TextBlock Margin="0,6,210,0" Foreground="#6F667A" TextWrapping="Wrap" Text="点击项目即可立即切换。PNG 与 Live2D 模型都会复制到本地应用数据目录。"/>
                             </StackPanel>
-                            <Button Width="108" HorizontalAlignment="Right" VerticalAlignment="Center" Content="添加自定义" Click="AddCustomPet"/>
+                            <StackPanel HorizontalAlignment="Right" VerticalAlignment="Center" Orientation="Horizontal">
+                                <Button Width="86" Margin="0,0,8,0" Content="添加 PNG" Click="AddCustomPet"/>
+                                <Button Width="112" Content="导入 Live2D" Click="AddLive2DPet"/>
+                            </StackPanel>
                         </Grid>
                         <ListBox x:Name="PetAppearanceList" Grid.Row="1" Margin="0,14,0,0" SelectionChanged="PetAppearanceSelectionChanged" ScrollViewer.HorizontalScrollBarVisibility="Disabled" ScrollViewer.VerticalScrollBarVisibility="Auto">
                             <ListBox.ItemContainerStyle>

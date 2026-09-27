@@ -4,7 +4,7 @@
 
 DesktopPet 是面向 Windows 10/11 x64 的桌宠与轻量效率工具。核心目标是用常驻桌面的 2D 宠物作为入口，以尽量少打扰用户的方式提供待办和快捷启动功能。
 
-当前版本采用 C#、.NET 8 和 WPF。桌宠使用透明无边框原生窗口，业务数据保存在本机；待办与便签可选依赖本机 OneDrive 客户端，通过同步目录跨设备合并，不调用 Microsoft Graph 或第三方 API。当前范围不包括番茄钟、天气、翻译、AI 对话、插件、Live2D、序列帧动画和鼠标穿透。
+当前版本采用 C#、.NET 8 和 WPF。桌宠使用透明无边框原生窗口，业务数据保存在本机；待办与便签可选依赖本机 OneDrive 客户端，通过同步目录跨设备合并，不调用 Microsoft Graph 或第三方 API。当前已实现范围不包括番茄钟、天气、翻译、AI 对话、插件、序列帧动画和鼠标穿透。Live2D 已接入 Cubism SDK for Web 5-r.5，支持安全导入、schema 2 宠物包、透明 WebView2 绘制和动作映射，详情见 `docs/LIVE2D_DESIGN.md`。
 
 设计原则：
 
@@ -19,7 +19,7 @@ DesktopPet 是面向 Windows 10/11 x64 的桌宠与轻量效率工具。核心�
 | --- | --- |
 | 目标系统 | Windows 10 / Windows 11，x64 |
 | UI 框架 | WPF |
-| 运行时 | .NET 8 (`net8.0-windows`) |
+| 运行时 | .NET 8 (`net8.0-windows10.0.17763.0`) |
 | 本地设置 | JSON |
 | 业务数据 | SQLite (`Microsoft.Data.Sqlite`) |
 | 待办与便签跨设备同步 | 本机 OneDrive 同步目录、每设备 JSON 副本 |
@@ -27,7 +27,7 @@ DesktopPet 是面向 Windows 10/11 x64 的桌宠与轻量效率工具。核心�
 | 窗口 DPI | Per-Monitor V2 |
 | 实例策略 | 单实例运行，重复启动时唤醒已有实例 |
 
-开发期间每次修改后应同步更新本文档，关闭旧的 `DesktopPet` 进程，重新构建并运行 Debug 版本，以便立即验证界面和交互。
+开发期间每次修改后应同步更新本文档，关闭旧的 `DesktopPet` 进程，重新构建并运行 Debug 版本，以便立即验证界面和交互。根目录的 `update-and-restart.cmd` 会依次更新代码、构建 `DesktopPet.Live2D.Web`、构建 WPF 项目，并从 `net8.0-windows10.0.17763.0` 输出目录重启应用；完整重编译 Live2D TypeScript 需要 Node.js 20+ 以及 pnpm 或 npm，依赖恢复不可用时脚本会验证并使用仓库中已构建的运行文件。
 
 ## 3. 桌宠窗口与素材
 
@@ -47,7 +47,7 @@ DesktopPet 是面向 Windows 10/11 x64 的桌宠与轻量效率工具。核心�
 
 自定义图片允许任意宽高比，使用 `Uniform` 完整居中显示，不裁剪或拉伸；仍推荐采用与窗口一致的 2:3 画布，并让三张图保持相同角色尺寸和脚底锚点，避免状态切换时跳动。导入时实际解码并验证 PNG，单张最大 20 MB、宽高均不超过 8192 像素。程序复制图片到本地宠物包，不依赖用户原始文件路径。
 
-桌宠窗口承载统一的 `IPetRenderer`，当前由 `PngPetRenderer` 实现。宠物包清单带 `rendererType` 与版本号；未来增加 Live2D 时使用独立渲染器和资源清单，状态机、设置选择与窗口交互不直接依赖 PNG。
+桌宠窗口承载统一的 `IPetRenderer`，PNG 由 `PngPetRenderer` 实现，Live2D 由 `Live2DPetRenderer` 在透明 WebView2 中加载官方 Cubism Core/Framework。宠物包清单带 `rendererType` 与版本号；Live2D 使用 schema 2 资源清单，状态机、设置选择与窗口交互不直接依赖 PNG。Live2D 以约 30 FPS 采样全局鼠标位置，按照 Cubism 官方示例的画布坐标换算（横纵轴统一以画布高度为尺度）生成 `[-1, 1]` 目标并驱动 `setDragging`。每个 Live2D 包可按参数 ID 配置影响度、反转和鼠标 X/Y 类型；运行时根据 MOC3 中参数的实际范围换算系数，不存在的参数会忽略。切换采用首帧确认：新模型成功绘制后才释放旧渲染器；Core、模型、WebGL 或 WebView2 加载失败时保留当前桌宠，运行中故障则回退内置 PNG。
 
 ## 4. 状态与基础交互
 
@@ -230,7 +230,7 @@ settings.json       # 桌宠位置、置顶偏好、全局组合键与统计窗�
 desktop-pet.db      # 待办、快捷启动项及排序、键盘与鼠标统计
 shortcuts/          # 自动生成的批处理快捷方式
 assets/pet/         # 本地宠物素材目录
-assets/pet/packages/<guid>/ # 自定义宠物包（manifest.json 与已复制的 PNG）
+assets/pet/packages/<guid>/ # 自定义宠物包（manifest.json 与已复制的 PNG 或 Live2D 资源）
 logs/               # 预留日志目录
 ```
 
@@ -304,10 +304,12 @@ src/DesktopPet/
 │  ├─ PetCatalog.cs                 # 内置预设、自定义包扫描、验证与原子导入
 │  ├─ IPetRenderer.cs               # PNG / Live2D 共用渲染边界
 │  ├─ PetRendererFactory.cs         # 按 rendererType 创建渲染器
-│  └─ PngPetRenderer.cs             # PNG 状态图片加载与回退
+│  ├─ PngPetRenderer.cs             # PNG 状态图片加载与回退
+│  └─ Live2DPetRenderer.cs          # WebView2、离线资源、首帧与故障回退
 ├─ UI/
 │  ├─ SettingsWindow.*              # 多 Tab 设置窗口
 │  ├─ PetEditorWindow.*             # 自定义桌宠名称、状态图片与预览
+│  ├─ Live2DImportWindow.*           # 模型验证、布局和动作映射
 │  ├─ QuickAccessWindow.*           # 待办、剪切板、便签与快捷启动悬浮窗
 │  ├─ CompactCountFormatter.cs      # 键盘与鼠标统计共用的紧凑计数格式
 │  ├─ KeyboardLayoutCatalog.cs      # 104 键与 87 键配列定义
@@ -348,7 +350,8 @@ src/DesktopPet/
 20. OneDrive 产生重名冲突副本、同步目录暂时不可用或单个 JSON 损坏时不丢失本地数据，界面显示准确状态且恢复后可继续同步。
 21. 设置中可在默认预设和多个自定义桌宠间即时切换；仅上传 Idle 可以正常使用，缺少的 Click / Dragging 状态回退到 Idle。
 22. 自定义桌宠添加、编辑、删除后立即生效并可在重启后恢复；删除当前项会先切回默认预设，损坏或丢失的当前包不会阻止应用启动。
+23. 可导入 `.model3.json` 或带唯一配套入口的 `.moc3`；`.cmo3` 给出导出指引。Live2D 在透明窗口完成首帧后才切换，Idle/Click/Dragging 动作映射生效；导入时和已导入后的“编辑”均可配置逐参数鼠标追踪，默认按 Cubism Viewer 设置启用角度 X/Y、身体角度 X、眼球 X/Y（影响度 100、不反转、对应鼠标左键 X/Y），可还原默认或全部关闭；加载或运行故障时保留当前桌宠或回退内置 PNG。
 
 ## 21. 后续扩展边界
 
-后续可评估提醒、番茄钟、更多内置预设、Live2D、主题切换或更完整的日志功能。Live2D 通过新增 `IPetRenderer` 实现和对应宠物包清单接入，不改变桌宠状态机与选择存储。直接联网、AI、插件和复杂动画应作为独立阶段设计，不应直接耦合进桌宠窗口；新增功能仍遵守“设置负责配置、悬浮窗负责点击即用”的分工。
+后续可评估提醒、番茄钟、更多内置预设、主题切换或更完整的日志功能。Live2D 已通过独立 `IPetRenderer` 和 schema 2 宠物包接入，不改变桌宠状态机与选择存储；发布前仍必须完成 SDK 发布许可确认、多 DPI/多显示器和长时间稳定性验证。直接联网、AI、插件和复杂动画应作为独立阶段设计，不应直接耦合进桌宠窗口；新增功能仍遵守“设置负责配置、悬浮窗负责点击即用”的分工。

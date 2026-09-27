@@ -37,6 +37,7 @@ public partial class App : System.Windows.Application
     private KeyboardStatisticsService? _keyboardStatisticsService;
     private MouseStatisticsService? _mouseStatisticsService;
     private PetCatalog? _petCatalog;
+    private bool _isRecoveringPetRenderer;
 
     protected override void OnStartup(StartupEventArgs e)
     {
@@ -59,7 +60,16 @@ public partial class App : System.Windows.Application
         var placementStore = new PetWindowPlacementStore(AppPaths.WindowPlacementPath);
         _petCatalog = new PetCatalog(Path.Combine(AppContext.BaseDirectory, "Assets", "Pet"), AppPaths.PetPackagesDirectory);
         var selectedPet = _petCatalog.FindOrDefault(placementStore.Load()?.SelectedPetId);
-        _petWindow = new MainWindow(new PetStateMachine(), selectedPet, placementStore);
+        try
+        {
+            _petWindow = new MainWindow(new PetStateMachine(), selectedPet, placementStore);
+        }
+        catch (Exception exception) when (!selectedPet.IsBuiltIn && exception is IOException or UnauthorizedAccessException or NotSupportedException or InvalidOperationException or ArgumentException or System.Windows.Markup.XamlParseException)
+        {
+            selectedPet = _petCatalog.BuiltInDefault;
+            _petWindow = new MainWindow(new PetStateMachine(), selectedPet, placementStore);
+            Dispatcher.BeginInvoke(() => MessageBox.Show($"上次选择的桌宠无法加载，已恢复为默认桌宠。\n\n{exception.Message}", "DesktopPet"));
+        }
         _petWindow.Closed += (_, _) => Shutdown();
         _petWindow.LocationChanged += (_, _) => MoveCompanionWindowsWithPet();
         _petWindow.SizeChanged += (_, _) => MoveCompanionWindowsWithPet();
@@ -67,6 +77,7 @@ public partial class App : System.Windows.Application
         _petWindow.SettingsRequested += (_, _) => ShowSettings();
         _petWindow.KeyboardStatisticsRequested += (_, _) => ShowKeyboardStatistics();
         _petWindow.MouseStatisticsRequested += (_, _) => ShowMouseStatistics();
+        _petWindow.RendererFailed += RecoverDefaultPet;
         _petWindow.FeatureFlyoutRequested += ToggleFeatureFlyout;
         _petWindow.Show();
 
@@ -126,6 +137,21 @@ public partial class App : System.Windows.Application
     }
 
     private void ActivateExistingPet() => _petWindow?.ActivatePet();
+
+    private async void RecoverDefaultPet(string message)
+    {
+        if (_isRecoveringPetRenderer || _petWindow is null || _petCatalog is null || _petWindow.SelectedPetId == PetCatalog.BuiltInDefaultId) return;
+        _isRecoveringPetRenderer = true;
+        try
+        {
+            if (await _petWindow.TrySelectPetAsync(_petCatalog.BuiltInDefault))
+                MessageBox.Show($"Live2D 渲染器发生故障，已恢复为默认桌宠。\n\n{message}", "DesktopPet");
+        }
+        finally
+        {
+            _isRecoveringPetRenderer = false;
+        }
+    }
 
     private void ToggleAppVisibility()
     {

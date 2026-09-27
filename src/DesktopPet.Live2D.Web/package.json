@@ -1,0 +1,12 @@
+{
+  "name": "desktop-pet-live2d-web",
+  "private": true,
+  "version": "1.0.0",
+  "scripts": {
+    "build": "tsc && node scripts/fix-module-specifiers.mjs",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3"
+  }
+}
