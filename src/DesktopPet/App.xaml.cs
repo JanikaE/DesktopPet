@@ -23,6 +23,9 @@ public partial class App : System.Windows.Application
     private QuickAccessWindow? _quickAccessWindow;
     private KeyboardStatisticsWindow? _keyboardStatisticsWindow;
     private MouseStatisticsWindow? _mouseStatisticsWindow;
+    private CompanionWindowDragController? _quickAccessDragController;
+    private CompanionWindowDragController? _keyboardStatisticsDragController;
+    private CompanionWindowDragController? _mouseStatisticsDragController;
     private DesktopPetRepository? _repository;
     private OneDriveSyncService? _oneDriveSyncService;
     private System.Threading.Mutex? _instanceMutex;
@@ -257,11 +260,15 @@ public partial class App : System.Windows.Application
         {
             _quickAccessWindow = new QuickAccessWindow(_repository, ShowSettingsLauncherTab);
             _quickAccessWindow.Owner = _petWindow;
-            _quickAccessWindow.Closed += (_, _) => _quickAccessWindow = null;
+            _quickAccessDragController = new CompanionWindowDragController(_petWindow, _quickAccessWindow);
+            _quickAccessWindow.Closed += (_, _) =>
+            {
+                _quickAccessWindow = null;
+                _quickAccessDragController = null;
+            };
         }
         _quickAccessWindow.Height = CompanionWindowHeight;
-        _quickAccessWindow.Left = _petWindow.Left - _quickAccessWindow.Width - 12;
-        _quickAccessWindow.Top = _petWindow.Top + _petWindow.Height - _quickAccessWindow.Height;
+        _quickAccessDragController?.PositionNextToPet();
         _quickAccessWindow.Refresh();
         _quickAccessWindow.Show();
     }
@@ -278,10 +285,14 @@ public partial class App : System.Windows.Application
                 _keyboardStatisticsService,
                 _petWindow.KeyboardLayoutId,
                 _petWindow.SetKeyboardLayout) { Owner = _petWindow };
-            _keyboardStatisticsWindow.Closed += (_, _) => _keyboardStatisticsWindow = null;
+            _keyboardStatisticsDragController = new CompanionWindowDragController(_petWindow, _keyboardStatisticsWindow);
+            _keyboardStatisticsWindow.Closed += (_, _) =>
+            {
+                _keyboardStatisticsWindow = null;
+                _keyboardStatisticsDragController = null;
+            };
         }
-        _keyboardStatisticsWindow.Left = _petWindow.Left - _keyboardStatisticsWindow.Width - 12;
-        _keyboardStatisticsWindow.Top = _petWindow.Top + _petWindow.Height - _keyboardStatisticsWindow.Height;
+        _keyboardStatisticsDragController?.PositionNextToPet();
         _keyboardStatisticsWindow.RefreshStatistics();
         _petWindow.SetCompanionWindowVisible(true);
         if (!_keyboardStatisticsWindow.IsVisible) _keyboardStatisticsWindow.Show();
@@ -296,16 +307,21 @@ public partial class App : System.Windows.Application
         if (_mouseStatisticsWindow is null)
         {
             _mouseStatisticsWindow = new MouseStatisticsWindow(_repository, _mouseStatisticsService, _petWindow.MouseLegendHidden, _petWindow.SetMouseLegendHidden) { Owner = _petWindow };
-            _mouseStatisticsWindow.Closed += (_, _) => _mouseStatisticsWindow = null;
+            _mouseStatisticsDragController = new CompanionWindowDragController(_petWindow, _mouseStatisticsWindow);
+            _mouseStatisticsWindow.Closed += (_, _) =>
+            {
+                _mouseStatisticsWindow = null;
+                _mouseStatisticsDragController = null;
+            };
         }
         _mouseStatisticsWindow.Height = CompanionWindowHeight;
-        _mouseStatisticsWindow.Top = _petWindow.Top + _petWindow.Height - _mouseStatisticsWindow.Height;
+        _mouseStatisticsDragController?.PositionNextToPet();
         _mouseStatisticsWindow.RefreshStatistics();
         _petWindow.SetCompanionWindowVisible(true);
         if (!_mouseStatisticsWindow.IsVisible) _mouseStatisticsWindow.Show();
         else _mouseStatisticsWindow.Activate();
         _mouseStatisticsWindow.UpdateLayout();
-        _mouseStatisticsWindow.Left = _petWindow.Left - _mouseStatisticsWindow.Width - 12;
+        _mouseStatisticsDragController?.PositionNextToPet();
     }
 
     private void ToggleKeyboardStatistics()
@@ -334,19 +350,10 @@ public partial class App : System.Windows.Application
     {
         if (_petWindow is null) return;
         if (_quickAccessWindow is { IsVisible: true })
-        {
-            _quickAccessWindow.Left = _petWindow.Left - _quickAccessWindow.Width - 12;
-            _quickAccessWindow.Top = _petWindow.Top + _petWindow.Height - _quickAccessWindow.Height;
-        }
+            _quickAccessDragController?.PositionNextToPet();
         if (_keyboardStatisticsWindow is { IsVisible: true })
-        {
-            _keyboardStatisticsWindow.Left = _petWindow.Left - _keyboardStatisticsWindow.Width - 12;
-            _keyboardStatisticsWindow.Top = _petWindow.Top + _petWindow.Height - _keyboardStatisticsWindow.Height;
-        }
+            _keyboardStatisticsDragController?.PositionNextToPet();
         if (_mouseStatisticsWindow is { IsVisible: true })
-        {
-            _mouseStatisticsWindow.Left = _petWindow.Left - _mouseStatisticsWindow.Width - 12;
-            _mouseStatisticsWindow.Top = _petWindow.Top + _petWindow.Height - _mouseStatisticsWindow.Height;
-        }
+            _mouseStatisticsDragController?.PositionNextToPet();
     }
 }
