@@ -3,6 +3,7 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Documents;
 using System.Windows.Input;
+using System.Windows.Interop;
 using System.Windows.Media;
 using Forms = System.Windows.Forms;
 
@@ -37,10 +38,42 @@ internal sealed class CompanionWindowDragController
     {
         var petHeight = WindowHeight(_petWindow);
         var companionHeight = WindowHeight(_companionWindow);
-        _companionWindow.Left = _petWindow.Left - _companionWindow.Width - CompanionGap;
+        _companionWindow.Left = CompanionLeft();
         _companionWindow.Top = petHeight > companionHeight
             ? _petWindow.Top + _alignment * (petHeight - companionHeight)
             : _petWindow.Top + petHeight - companionHeight;
+    }
+
+    private double CompanionLeft()
+    {
+        var companionWidth = WindowWidth(_companionWindow);
+        var leftOfPet = _petWindow.Left - companionWidth - CompanionGap;
+        var source = PresentationSource.FromVisual(_petWindow);
+        var handle = new WindowInteropHelper(_petWindow).Handle;
+        if (source?.CompositionTarget is null || handle == IntPtr.Zero) return leftOfPet;
+
+        // Screen.WorkingArea is expressed in physical pixels while WPF window
+        // positions use device-independent pixels. Compare relative to the pet's
+        // on-screen position so this also works on per-monitor-DPI displays.
+        var scaleX = source.CompositionTarget.TransformToDevice.M11;
+        if (scaleX <= 0) return leftOfPet;
+
+        var petScreenLeft = _petWindow.PointToScreen(new Point(0, 0)).X;
+        var petWidthInPixels = WindowWidth(_petWindow) * scaleX;
+        var companionWidthInPixels = companionWidth * scaleX;
+        var gapInPixels = CompanionGap * scaleX;
+        var workingArea = Forms.Screen.FromHandle(handle).WorkingArea;
+
+        var targetLeft = petScreenLeft - companionWidthInPixels - gapInPixels;
+        if (targetLeft < workingArea.Left)
+            targetLeft = petScreenLeft + petWidthInPixels + gapInPixels;
+
+        var rightmostLeft = workingArea.Right - companionWidthInPixels;
+        targetLeft = rightmostLeft < workingArea.Left
+            ? workingArea.Left
+            : Math.Clamp(targetLeft, workingArea.Left, rightmostLeft);
+
+        return _petWindow.Left + (targetLeft - petScreenLeft) / scaleX;
     }
 
     private void OnPreviewMouseDown(object sender, MouseButtonEventArgs e)
@@ -110,6 +143,8 @@ internal sealed class CompanionWindowDragController
     }
 
     private static double WindowHeight(Window window) => window.ActualHeight > 0 ? window.ActualHeight : window.Height;
+
+    private static double WindowWidth(Window window) => window.ActualWidth > 0 ? window.ActualWidth : window.Width;
 
     private static bool IsInteractive(DependencyObject? source)
     {
