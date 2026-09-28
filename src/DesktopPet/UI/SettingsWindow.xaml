@@ -130,6 +130,8 @@
                                     <Border Height="98" Margin="4" Padding="5" Background="#BFFFFFFF" BorderBrush="#DDD3E9" BorderThickness="1" CornerRadius="12" MouseLeftButtonDown="CardMouseLeftButtonDown">
                                         <Border.ContextMenu>
                                             <ContextMenu>
+                                                <MenuItem Header="打开所在目录" Click="OpenLauncherDirectory"/>
+                                                <Separator/>
                                                 <MenuItem Header="删除" Click="DeleteLauncher"/>
                                             </ContextMenu>
                                         </Border.ContextMenu>

@@ -248,6 +248,25 @@ public partial class QuickAccessWindow : Window
         LauncherProcess.Start(item.TargetPath);
     }
 
+    private void OpenLauncherDirectory(object sender, RoutedEventArgs e)
+    {
+        if (sender is not MenuItem menuItem ||
+            LogicalTreeHelper.GetParent(menuItem) is not ContextMenu
+            {
+                PlacementTarget: FrameworkElement { DataContext: LauncherItem item }
+            })
+            return;
+
+        try
+        {
+            LauncherProcess.OpenContainingDirectory(item.TargetPath);
+        }
+        catch (DirectoryNotFoundException)
+        {
+            MessageBox.Show("所在目录已不存在。", "DesktopPet");
+        }
+    }
+
     private void OpenSettingsLauncher(object sender, RoutedEventArgs e) => _openSettingsLauncher();
 
     private void RepositoryLaunchersChanged(object? sender, EventArgs e) => LauncherList.ItemsSource = _repository.GetLaunchers();

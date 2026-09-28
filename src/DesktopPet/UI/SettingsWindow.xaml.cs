@@ -419,6 +419,19 @@ public partial class SettingsWindow : Window
         RefreshLaunchers();
     }
 
+    private void OpenLauncherDirectory(object sender, RoutedEventArgs e)
+    {
+        if (GetContextMenuLauncherItem(sender) is not LauncherItem item) return;
+        try
+        {
+            LauncherProcess.OpenContainingDirectory(item.TargetPath);
+        }
+        catch (DirectoryNotFoundException)
+        {
+            MessageBox.Show("所在目录已不存在。", "DesktopPet");
+        }
+    }
+
     private static LauncherItem? GetContextMenuLauncherItem(object sender)
     {
         if (sender is not MenuItem menuItem) return null;

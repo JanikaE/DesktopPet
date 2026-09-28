@@ -6,6 +6,15 @@ namespace DesktopPet.Core;
 
 public static class LauncherProcess
 {
+    public static void OpenContainingDirectory(string targetPath)
+    {
+        var directoryPath = Directory.Exists(targetPath) ? targetPath : Path.GetDirectoryName(targetPath);
+        if (string.IsNullOrWhiteSpace(directoryPath) || !Directory.Exists(directoryPath))
+            throw new DirectoryNotFoundException("The launcher's containing directory does not exist.");
+
+        Process.Start(new ProcessStartInfo(directoryPath) { UseShellExecute = true });
+    }
+
     public static void Start(string targetPath)
     {
         var workingDirectory = Directory.Exists(targetPath) ? targetPath : Path.GetDirectoryName(targetPath) ?? Environment.CurrentDirectory;
