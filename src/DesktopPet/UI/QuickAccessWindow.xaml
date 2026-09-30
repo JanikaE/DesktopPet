@@ -6,6 +6,7 @@
         <ui:LauncherIconConverter x:Key="LauncherIcon"/>
     </Window.Resources>
     <Border Padding="10" CornerRadius="20" Background="#FAF7FC" BorderBrush="#D6C8E4" BorderThickness="1">
+        <Grid>
         <TabControl>
             <TabItem Header="待办">
                 <Grid Margin="4,10,4,4">
@@ -22,8 +23,12 @@
                         </ListBox.ItemContainerStyle>
                         <ListBox.ItemTemplate>
                             <DataTemplate>
-                                <DockPanel Margin="4">
-                                    <Button DockPanel.Dock="Right" Width="42" Padding="3" Content="删除" Tag="{Binding}" Click="DeleteTodo"/>
+                                <Border Margin="4">
+                                    <Border.ContextMenu>
+                                        <ContextMenu>
+                                            <MenuItem Header="删除" Click="DeleteTodo"/>
+                                        </ContextMenu>
+                                    </Border.ContextMenu>
                                     <CheckBox HorizontalContentAlignment="Stretch" IsChecked="{Binding IsCompleted}" Tag="{Binding}" Checked="TodoChanged" Unchecked="TodoChanged">
                                         <TextBlock Text="{Binding Title}" TextWrapping="Wrap">
                                             <TextBlock.Style>
@@ -38,7 +43,7 @@
                                                 </Style>
                                             </TextBlock.Style></TextBlock>
                                     </CheckBox>
-                                </DockPanel>
+                                </Border>
                             </DataTemplate>
                         </ListBox.ItemTemplate>
                     </ListBox>
@@ -55,10 +60,10 @@
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
-                        <TextBox x:Name="ClipboardContentBox" MinHeight="34" MaxHeight="72" AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" ToolTip="手动输入，或读取系统剪切板；点击输入框外自动添加" LostKeyboardFocus="ClipboardContentLostFocus"/>
-                        <Button Grid.Column="1" Margin="6,0,0,0" Padding="8,5" Content="读取" ToolTip="读取系统剪切板中的文本" Click="ReadClipboard"/>
+                        <TextBox x:Name="ClipboardContentBox" MinHeight="34" MaxHeight="72" AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" ToolTip="手动输入后点击添加，或点击输入框外自动添加" LostKeyboardFocus="ClipboardContentLostFocus"/>
+                        <Button Grid.Column="1" Margin="6,0,0,0" Padding="8,5" Content="添加" ToolTip="添加输入框中的内容" Click="AddClipboardItem"/>
                     </Grid>
-                    <ListBox x:Name="ClipboardList" Grid.Row="1" Margin="0,8,0,0" ScrollViewer.HorizontalScrollBarVisibility="Disabled" ScrollViewer.VerticalScrollBarVisibility="Auto">
+                    <ListBox x:Name="ClipboardList" Grid.Row="1" Margin="0,8,0,0" ScrollViewer.HorizontalScrollBarVisibility="Disabled" ScrollViewer.VerticalScrollBarVisibility="Auto" PreviewMouseLeftButtonUp="ClipboardItemClicked">
                         <ListBox.ItemContainerStyle>
                             <Style TargetType="ListBoxItem">
                                 <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
@@ -66,16 +71,14 @@
                         </ListBox.ItemContainerStyle>
                         <ListBox.ItemTemplate>
                             <DataTemplate>
-                                <Grid Margin="4">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*"/>
-                                        <ColumnDefinition Width="Auto"/>
-                                        <ColumnDefinition Width="Auto"/>
-                                    </Grid.ColumnDefinitions>
+                                <Border Margin="4">
+                                    <Border.ContextMenu>
+                                        <ContextMenu>
+                                            <MenuItem Header="删除" Click="DeleteClipboardItem"/>
+                                        </ContextMenu>
+                                    </Border.ContextMenu>
                                     <TextBlock Margin="3" MaxHeight="58" Text="{Binding Content}" TextWrapping="Wrap" TextTrimming="CharacterEllipsis" ToolTip="{Binding Content}"/>
-                                    <Button Grid.Column="1" Margin="4,0,0,0" Width="38" Padding="3" Content="复制" Tag="{Binding}" Click="CopyClipboardItem"/>
-                                    <Button Grid.Column="2" Margin="4,0,0,0" Width="38" Padding="3" Content="删除" Tag="{Binding}" Click="DeleteClipboardItem"/>
-                                </Grid>
+                                </Border>
                             </DataTemplate>
                         </ListBox.ItemTemplate>
                     </ListBox>
@@ -186,5 +189,9 @@
                 </Grid>
             </TabItem>
         </TabControl>
+            <Border x:Name="ClipboardToast" Panel.ZIndex="10" HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="0,0,0,12" Padding="14,7" CornerRadius="14" Background="#E95E536A" IsHitTestVisible="False" Visibility="Collapsed">
+                <TextBlock Foreground="White" FontWeight="SemiBold" Text="已复制"/>
+            </Border>
+        </Grid>
     </Border>
 </Window>

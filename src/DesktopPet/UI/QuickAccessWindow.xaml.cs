@@ -16,6 +16,7 @@ public partial class QuickAccessWindow : Window
     private readonly Action _openSettingsLauncher;
     private readonly LauncherDragDrop _launcherDragDrop;
     private readonly DispatcherTimer _noteSaveTimer;
+    private readonly DispatcherTimer _clipboardToastTimer;
     private NoteItem? _editingNote;
     private bool _loadingNote;
 
@@ -28,6 +29,12 @@ public partial class QuickAccessWindow : Window
         _launcherDragDrop = new LauncherDragDrop(LauncherList, repository);
         _noteSaveTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
         _noteSaveTimer.Tick += (_, _) => CommitNote();
+        _clipboardToastTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1.5) };
+        _clipboardToastTimer.Tick += (_, _) =>
+        {
+            _clipboardToastTimer.Stop();
+            ClipboardToast.Visibility = Visibility.Collapsed;
+        };
         _repository.TodosChanged += RepositoryTodosChanged;
         _repository.NotesChanged += RepositoryNotesChanged;
         _repository.LaunchersChanged += RepositoryLaunchersChanged;
@@ -39,6 +46,7 @@ public partial class QuickAccessWindow : Window
         {
             CommitNote();
             _noteSaveTimer.Stop();
+            _clipboardToastTimer.Stop();
             _repository.TodosChanged -= RepositoryTodosChanged;
             _repository.NotesChanged -= RepositoryNotesChanged;
             _repository.LaunchersChanged -= RepositoryLaunchersChanged;
@@ -81,7 +89,7 @@ public partial class QuickAccessWindow : Window
 
     private void DeleteTodo(object sender, RoutedEventArgs e)
     {
-        if (((FrameworkElement)sender).Tag is TodoItem item) _repository.DeleteTodo(item.Id);
+        if (GetContextMenuItem<TodoItem>(sender) is { } item) _repository.DeleteTodo(item.Id);
     }
 
     private void ClipboardContentLostFocus(object sender, KeyboardFocusChangedEventArgs e) => CommitClipboardInput();
@@ -114,26 +122,21 @@ public partial class QuickAccessWindow : Window
     private static DependencyObject? GetParent(DependencyObject node) =>
         node is Visual ? VisualTreeHelper.GetParent(node) : LogicalTreeHelper.GetParent(node);
 
-    private void ReadClipboard(object sender, RoutedEventArgs e)
-    {
-        try
-        {
-            ClipboardContentBox.Text = Clipboard.ContainsText() ? Clipboard.GetText() : string.Empty;
-            ClipboardContentBox.Focus();
-            ClipboardContentBox.CaretIndex = ClipboardContentBox.Text.Length;
-        }
-        catch (ExternalException)
-        {
-            MessageBox.Show("暂时无法读取系统剪切板，请稍后重试。", "DesktopPet");
-        }
-    }
+    private void AddClipboardItem(object sender, RoutedEventArgs e) => CommitClipboardInput();
 
-    private void CopyClipboardItem(object sender, RoutedEventArgs e)
+    private void ClipboardItemClicked(object sender, MouseButtonEventArgs e)
     {
-        if (((FrameworkElement)sender).Tag is not ClipboardItem item) return;
+        if (e.OriginalSource is not DependencyObject source ||
+            ItemsControl.ContainerFromElement(ClipboardList, source) is not ListBoxItem
+            {
+                DataContext: ClipboardItem item
+            })
+            return;
+
         try
         {
             Clipboard.SetText(item.Content);
+            ShowClipboardToast();
         }
         catch (ExternalException)
         {
@@ -143,9 +146,28 @@ public partial class QuickAccessWindow : Window
 
     private void DeleteClipboardItem(object sender, RoutedEventArgs e)
     {
-        if (((FrameworkElement)sender).Tag is not ClipboardItem item) return;
+        if (GetContextMenuItem<ClipboardItem>(sender) is not { } item) return;
         _repository.DeleteClipboardItem(item.Id);
         ClipboardList.ItemsSource = _repository.GetClipboardItems();
+    }
+
+    private void ShowClipboardToast()
+    {
+        ClipboardToast.Visibility = Visibility.Visible;
+        _clipboardToastTimer.Stop();
+        _clipboardToastTimer.Start();
+    }
+
+    private static T? GetContextMenuItem<T>(object sender) where T : class
+    {
+        if (sender is not MenuItem menuItem ||
+            LogicalTreeHelper.GetParent(menuItem) is not ContextMenu
+            {
+                PlacementTarget: FrameworkElement { DataContext: T item }
+            })
+            return null;
+
+        return item;
     }
 
     private void NewNote(object sender, RoutedEventArgs e)

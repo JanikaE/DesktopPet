@@ -8,6 +8,7 @@ EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "解决方案项", "解决方案项", "{D31A6C7F-6953-4FB1-B50C-64727023FADE}"
 	ProjectSection(SolutionItems) = preProject
 		docs\AGENTS.md = docs\AGENTS.md
+		docs\LIVE2D_DESIGN.md = docs\LIVE2D_DESIGN.md
 		update-and-restart.cmd = update-and-restart.cmd
 	EndProjectSection
 EndProject
