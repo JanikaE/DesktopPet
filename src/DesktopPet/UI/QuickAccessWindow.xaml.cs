@@ -7,6 +7,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Runtime.InteropServices;
 using System.Windows.Threading;
+using Forms = System.Windows.Forms;
 
 namespace DesktopPet.UI;
 
@@ -135,7 +136,9 @@ public partial class QuickAccessWindow : Window
 
         try
         {
-            Clipboard.SetText(item.Content);
+            // The clipboard is a shared Windows resource and can be locked briefly by
+            // another process. Let WinForms retry instead of failing on the first lock.
+            Forms.Clipboard.SetDataObject(item.Content, true, 10, 100);
             ShowClipboardToast();
         }
         catch (ExternalException)
