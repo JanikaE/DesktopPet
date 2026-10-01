@@ -36,12 +36,37 @@ internal sealed class CompanionWindowDragController
 
     public void PositionNextToPet()
     {
+        _companionWindow.Left = CompanionLeft();
+        _companionWindow.Top = CompanionTop();
+    }
+
+    private double CompanionTop()
+    {
         var petHeight = WindowHeight(_petWindow);
         var companionHeight = WindowHeight(_companionWindow);
-        _companionWindow.Left = CompanionLeft();
-        _companionWindow.Top = petHeight > companionHeight
+        var preferredTop = petHeight > companionHeight
             ? _petWindow.Top + _alignment * (petHeight - companionHeight)
             : _petWindow.Top + petHeight - companionHeight;
+
+        var source = PresentationSource.FromVisual(_petWindow);
+        var handle = new WindowInteropHelper(_petWindow).Handle;
+        if (source?.CompositionTarget is null || handle == IntPtr.Zero) return preferredTop;
+
+        var scaleY = source.CompositionTarget.TransformToDevice.M22;
+        if (scaleY <= 0) return preferredTop;
+
+        var petScreenTop = _petWindow.PointToScreen(new Point(0, 0)).Y;
+        var preferredScreenTop = petScreenTop + (preferredTop - _petWindow.Top) * scaleY;
+        var companionHeightInPixels = companionHeight * scaleY;
+        var workingArea = Forms.Screen.FromHandle(handle).WorkingArea;
+        var overflow = preferredScreenTop + companionHeightInPixels - workingArea.Bottom;
+        if (overflow <= 0) return preferredTop;
+
+        // Move upward only as far as the pet's top edge. If the available area is
+        // shorter than the companion window, keeping it anchored to the pet takes
+        // precedence over moving it above the pet.
+        var targetScreenTop = Math.Max(petScreenTop, preferredScreenTop - overflow);
+        return _petWindow.Top + (targetScreenTop - petScreenTop) / scaleY;
     }
 
     private double CompanionLeft()
