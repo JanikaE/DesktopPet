@@ -199,6 +199,39 @@ public sealed class DesktopPetRepository(string databasePath)
         if (changed) TodosChanged?.Invoke(this, EventArgs.Empty);
     }
 
+    public void SetTodoTitle(Guid id, string title)
+    {
+        title = title.Trim();
+        if (title.Length == 0) throw new ArgumentException("待办内容不能为空。", nameof(title));
+
+        var changed = false;
+        lock (_todoGate)
+        {
+            using var connection = OpenConnection();
+            using var transaction = connection.BeginTransaction();
+            using var readCommand = connection.CreateCommand();
+            readCommand.Transaction = transaction;
+            readCommand.CommandText = "SELECT title FROM todos WHERE sync_id = $id AND deleted_at IS NULL;";
+            readCommand.Parameters.AddWithValue("$id", id.ToString("D"));
+            var current = readCommand.ExecuteScalar() as string;
+            if (current is null || string.Equals(current, title, StringComparison.Ordinal)) return;
+
+            using var updateCommand = connection.CreateCommand();
+            updateCommand.Transaction = transaction;
+            updateCommand.CommandText = "UPDATE todos SET title = $title WHERE sync_id = $id AND deleted_at IS NULL;";
+            updateCommand.Parameters.AddWithValue("$id", id.ToString("D"));
+            updateCommand.Parameters.AddWithValue("$title", title);
+            changed = updateCommand.ExecuteNonQuery() > 0;
+            if (changed)
+            {
+                var operation = new TodoSyncOperation(Guid.NewGuid(), id, GetDeviceId(connection, transaction), NextTodoClock(connection, transaction), TodoSyncOperationKinds.SetTitle, title, null, DateTimeOffset.UtcNow);
+                InsertTodoOperation(connection, transaction, operation);
+            }
+            transaction.Commit();
+        }
+        if (changed) TodosChanged?.Invoke(this, EventArgs.Empty);
+    }
+
     public void DeleteTodo(Guid id)
     {
         var changed = false;

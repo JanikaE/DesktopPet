@@ -26,23 +26,28 @@
                                 <Border Margin="4">
                                     <Border.ContextMenu>
                                         <ContextMenu>
+                                            <MenuItem Header="编辑" Click="EditTodo"/>
                                             <MenuItem Header="删除" Click="DeleteTodo"/>
                                         </ContextMenu>
                                     </Border.ContextMenu>
-                                    <CheckBox HorizontalContentAlignment="Stretch" IsChecked="{Binding IsCompleted}" Tag="{Binding}" Checked="TodoChanged" Unchecked="TodoChanged">
-                                        <TextBlock Text="{Binding Title}" TextWrapping="Wrap">
-                                            <TextBlock.Style>
-                                                <Style TargetType="TextBlock">
-                                                    <Setter Property="Foreground" Value="#4B4358"/>
-                                                    <Style.Triggers>
-                                                        <DataTrigger Binding="{Binding IsCompleted}" Value="True">
-                                                            <Setter Property="Foreground" Value="#9A92A3"/>
-                                                            <Setter Property="TextDecorations" Value="Strikethrough"/>
-                                                        </DataTrigger>
-                                                    </Style.Triggers>
-                                                </Style>
-                                            </TextBlock.Style></TextBlock>
-                                    </CheckBox>
+                                    <Grid>
+                                        <CheckBox x:Name="TodoDisplay" HorizontalContentAlignment="Stretch" IsChecked="{Binding IsCompleted}" Tag="{Binding}" Checked="TodoChanged" Unchecked="TodoChanged">
+                                            <TextBlock Text="{Binding Title}" TextWrapping="Wrap">
+                                                <TextBlock.Style>
+                                                    <Style TargetType="TextBlock">
+                                                        <Setter Property="Foreground" Value="#4B4358"/>
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding IsCompleted}" Value="True">
+                                                                <Setter Property="Foreground" Value="#9A92A3"/>
+                                                                <Setter Property="TextDecorations" Value="Strikethrough"/>
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </TextBlock.Style>
+                                            </TextBlock>
+                                        </CheckBox>
+                                        <TextBox x:Name="TodoEditor" Visibility="Collapsed" Text="{Binding Title, Mode=OneWay}" TextWrapping="Wrap" Tag="{Binding}" LostKeyboardFocus="TodoEditorLostFocus" KeyDown="TodoEditorKeyDown"/>
+                                    </Grid>
                                 </Border>
                             </DataTemplate>
                         </ListBox.ItemTemplate>

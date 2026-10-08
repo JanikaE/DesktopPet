@@ -11,6 +11,8 @@ public static class TodoMergeEngine
                 .Where(operation => operation.Kind == TodoSyncOperationKinds.Add && !string.IsNullOrWhiteSpace(operation.Title)));
             if (add is null) continue;
 
+            var title = MaxOperation(group
+                .Where(operation => operation.Kind is TodoSyncOperationKinds.Add or TodoSyncOperationKinds.SetTitle));
             var state = MaxOperation(group
                 .Where(operation => operation.Kind is TodoSyncOperationKinds.Add or TodoSyncOperationKinds.SetCompleted));
             var deletion = MaxOperation(group
@@ -18,7 +20,7 @@ public static class TodoMergeEngine
 
             results.Add(new TodoMaterializedItem(
                 group.Key,
-                add.Title!,
+                title?.Title ?? add.Title!,
                 state?.IsCompleted ?? false,
                 add.CreatedAtUtc,
                 deletion?.CreatedAtUtc));
@@ -39,6 +41,7 @@ public static class TodoMergeEngine
         return operation.Kind switch
         {
             TodoSyncOperationKinds.Add => !string.IsNullOrWhiteSpace(operation.Title) && operation.IsCompleted is not null,
+            TodoSyncOperationKinds.SetTitle => !string.IsNullOrWhiteSpace(operation.Title),
             TodoSyncOperationKinds.SetCompleted => operation.IsCompleted is not null,
             TodoSyncOperationKinds.Delete => true,
             _ => false

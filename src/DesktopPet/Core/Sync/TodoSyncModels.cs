@@ -3,6 +3,7 @@ namespace DesktopPet.Core.Sync;
 public static class TodoSyncOperationKinds
 {
     public const string Add = "add";
+    public const string SetTitle = "setTitle";
     public const string SetCompleted = "setCompleted";
     public const string Delete = "delete";
 }

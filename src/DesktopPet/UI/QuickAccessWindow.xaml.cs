@@ -93,6 +93,73 @@ public partial class QuickAccessWindow : Window
         if (GetContextMenuItem<TodoItem>(sender) is { } item) _repository.DeleteTodo(item.Id);
     }
 
+    private void EditTodo(object sender, RoutedEventArgs e)
+    {
+        if (sender is not MenuItem menuItem ||
+            LogicalTreeHelper.GetParent(menuItem) is not ContextMenu
+            {
+                PlacementTarget: FrameworkElement { DataContext: TodoItem item } target
+            })
+            return;
+
+        var display = FindVisualChild<CheckBox>(target, "TodoDisplay");
+        var editor = FindVisualChild<TextBox>(target, "TodoEditor");
+        if (display is null || editor is null) return;
+
+        editor.Text = item.Title;
+        display.Visibility = Visibility.Collapsed;
+        editor.Visibility = Visibility.Visible;
+        Dispatcher.BeginInvoke(DispatcherPriority.Input, () =>
+        {
+            editor.Focus();
+            editor.SelectAll();
+        });
+    }
+
+    private void TodoEditorLostFocus(object sender, KeyboardFocusChangedEventArgs e) => CommitTodoEdit((TextBox)sender);
+
+    private void TodoEditorKeyDown(object sender, KeyEventArgs e)
+    {
+        var editor = (TextBox)sender;
+        if (e.Key is Key.Enter or Key.Return)
+        {
+            e.Handled = true;
+            CommitTodoEdit(editor);
+        }
+        else if (e.Key == Key.Escape)
+        {
+            e.Handled = true;
+            CancelTodoEdit(editor);
+        }
+    }
+
+    private void CommitTodoEdit(TextBox editor)
+    {
+        if (editor.Visibility != Visibility.Visible || editor.Tag is not TodoItem item) return;
+        var title = editor.Text.Trim();
+        if (title.Length > 0) _repository.SetTodoTitle(item.Id, title);
+        CancelTodoEdit(editor);
+    }
+
+    private static void CancelTodoEdit(TextBox editor)
+    {
+        editor.Visibility = Visibility.Collapsed;
+        if (FindVisualChild<CheckBox>(editor.Parent, "TodoDisplay") is { } display)
+            display.Visibility = Visibility.Visible;
+    }
+
+    private static T? FindVisualChild<T>(DependencyObject? root, string name) where T : FrameworkElement
+    {
+        if (root is null) return null;
+        for (var index = 0; index < VisualTreeHelper.GetChildrenCount(root); index++)
+        {
+            var child = VisualTreeHelper.GetChild(root, index);
+            if (child is T element && string.Equals(element.Name, name, StringComparison.Ordinal)) return element;
+            if (FindVisualChild<T>(child, name) is { } descendant) return descendant;
+        }
+        return null;
+    }
+
     private void ClipboardContentLostFocus(object sender, KeyboardFocusChangedEventArgs e) => CommitClipboardInput();
 
     private void CommitClipboardInput()
