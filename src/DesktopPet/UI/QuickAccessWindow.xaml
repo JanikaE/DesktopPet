@@ -4,6 +4,7 @@
     </shell:WindowChrome.WindowChrome>
     <Window.Resources>
         <ui:LauncherIconConverter x:Key="LauncherIcon"/>
+        <BooleanToVisibilityConverter x:Key="BooleanToVisibility"/>
     </Window.Resources>
     <Border Padding="10" CornerRadius="20" Background="#FAF7FC" BorderBrush="#D6C8E4" BorderThickness="1">
         <Grid>
@@ -12,10 +13,19 @@
                 <Grid Margin="4,10,4,4">
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
                         <RowDefinition Height="*"/>
                     </Grid.RowDefinitions>
-                    <TextBox x:Name="TodoTitleBox" ToolTip="输入待办，按回车或点击输入框外自动添加" LostKeyboardFocus="TodoTitleLostFocus" KeyDown="TodoTitleKeyDown"/>
-                    <ListBox x:Name="TodoList" Grid.Row="1" Margin="0,8,0,0" ScrollViewer.HorizontalScrollBarVisibility="Disabled" ScrollViewer.VerticalScrollBarVisibility="Auto">
+                    <Border x:Name="TodoInputModePanel" Margin="0,0,0,6" Padding="8,4" Background="#F1ECF7" CornerRadius="8" Visibility="Collapsed">
+                        <Grid>
+                            <TextBlock x:Name="TodoInputModeText" Margin="0,0,26,0" Foreground="#715B8C" FontSize="11" TextTrimming="CharacterEllipsis"/>
+                            <Button Width="20" Height="20" HorizontalAlignment="Right" Padding="0" Content="×" ToolTip="取消添加子待办" Click="CancelSubTodoInput"/>
+                        </Grid>
+                    </Border>
+                    <Grid x:Name="TodoInputArea" Grid.Row="1">
+                        <TextBox x:Name="TodoTitleBox" ToolTip="输入待办，按回车或点击输入框外自动添加" LostKeyboardFocus="TodoTitleLostFocus" KeyDown="TodoTitleKeyDown"/>
+                    </Grid>
+                    <ListBox x:Name="TodoList" Grid.Row="2" Margin="0,8,0,0" ScrollViewer.HorizontalScrollBarVisibility="Disabled" ScrollViewer.VerticalScrollBarVisibility="Auto">
                         <ListBox.ItemContainerStyle>
                             <Style TargetType="ListBoxItem">
                                 <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
@@ -25,19 +35,40 @@
                             <DataTemplate>
                                 <Border Margin="4">
                                     <Border.ContextMenu>
-                                        <ContextMenu>
+                                        <ContextMenu DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}">
+                                            <MenuItem Header="添加子待办" Click="AddSubTodo">
+                                                <MenuItem.Style>
+                                                    <Style TargetType="MenuItem">
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding CanAddChild}" Value="False">
+                                                                <Setter Property="Visibility" Value="Collapsed"/>
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </MenuItem.Style>
+                                            </MenuItem>
                                             <MenuItem Header="编辑" Click="EditTodo"/>
                                             <MenuItem Header="删除" Click="DeleteTodo"/>
                                         </ContextMenu>
                                     </Border.ContextMenu>
-                                    <Grid>
-                                        <CheckBox x:Name="TodoDisplay" HorizontalContentAlignment="Stretch" IsChecked="{Binding IsCompleted}" Tag="{Binding}" Checked="TodoChanged" Unchecked="TodoChanged">
-                                            <TextBlock Text="{Binding Title}" TextWrapping="Wrap">
+                                    <Grid Margin="{Binding ContentMargin}">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <Grid x:Name="TodoDisplay" Grid.Column="0">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="Auto"/>
+                                                <ColumnDefinition Width="*"/>
+                                            </Grid.ColumnDefinitions>
+                                            <CheckBox x:Name="TodoCheckBox" VerticalAlignment="Top" IsChecked="{Binding Item.IsCompleted}" Tag="{Binding Item}" Checked="TodoChanged" Unchecked="TodoChanged"/>
+                                            <TextBlock Grid.Column="1" Margin="6,0,0,0" Text="{Binding Item.Title}" TextWrapping="Wrap">
                                                 <TextBlock.Style>
                                                     <Style TargetType="TextBlock">
                                                         <Setter Property="Foreground" Value="#4B4358"/>
                                                         <Style.Triggers>
-                                                            <DataTrigger Binding="{Binding IsCompleted}" Value="True">
+                                                            <DataTrigger Binding="{Binding Item.IsCompleted}" Value="True">
                                                                 <Setter Property="Foreground" Value="#9A92A3"/>
                                                                 <Setter Property="TextDecorations" Value="Strikethrough"/>
                                                             </DataTrigger>
@@ -45,8 +76,13 @@
                                                     </Style>
                                                 </TextBlock.Style>
                                             </TextBlock>
-                                        </CheckBox>
-                                        <TextBox x:Name="TodoEditor" Visibility="Collapsed" Text="{Binding Title, Mode=OneWay}" TextWrapping="Wrap" Tag="{Binding}" LostKeyboardFocus="TodoEditorLostFocus" KeyDown="TodoEditorKeyDown"/>
+                                        </Grid>
+                                        <TextBox x:Name="TodoEditor" Grid.Column="0" Visibility="Collapsed" Text="{Binding Item.Title, Mode=OneWay}" TextWrapping="Wrap" Tag="{Binding Item}" LostKeyboardFocus="TodoEditorLostFocus" KeyDown="TodoEditorKeyDown"/>
+                                        <TextBlock Grid.Column="1" Margin="6,0,4,0" VerticalAlignment="Center" Foreground="#9A92A3" FontSize="10"
+                                                   Text="{Binding ProgressText}" Visibility="{Binding HasChildren, Converter={StaticResource BooleanToVisibility}}"/>
+                                        <Button Grid.Column="2" Width="18" Height="18" Padding="0" VerticalAlignment="Top" Background="Transparent" BorderThickness="0"
+                                                Content="{Binding ExpandGlyph}" ToolTip="展开或折叠子待办" Tag="{Binding}" Click="ToggleTodoExpansion"
+                                                Visibility="{Binding HasChildren, Converter={StaticResource BooleanToVisibility}}"/>
                                     </Grid>
                                 </Border>
                             </DataTemplate>

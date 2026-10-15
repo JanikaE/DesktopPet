@@ -23,7 +23,8 @@ public static class TodoMergeEngine
                 title?.Title ?? add.Title!,
                 state?.IsCompleted ?? false,
                 add.CreatedAtUtc,
-                deletion?.CreatedAtUtc));
+                deletion?.CreatedAtUtc,
+                add.ParentItemId));
         }
 
         return results
@@ -40,10 +41,12 @@ public static class TodoMergeEngine
 
         return operation.Kind switch
         {
-            TodoSyncOperationKinds.Add => !string.IsNullOrWhiteSpace(operation.Title) && operation.IsCompleted is not null,
-            TodoSyncOperationKinds.SetTitle => !string.IsNullOrWhiteSpace(operation.Title),
-            TodoSyncOperationKinds.SetCompleted => operation.IsCompleted is not null,
-            TodoSyncOperationKinds.Delete => true,
+            TodoSyncOperationKinds.Add => !string.IsNullOrWhiteSpace(operation.Title) &&
+                                          operation.IsCompleted is not null &&
+                                          operation.ParentItemId != operation.ItemId,
+            TodoSyncOperationKinds.SetTitle => !string.IsNullOrWhiteSpace(operation.Title) && operation.ParentItemId is null,
+            TodoSyncOperationKinds.SetCompleted => operation.IsCompleted is not null && operation.ParentItemId is null,
+            TodoSyncOperationKinds.Delete => operation.ParentItemId is null,
             _ => false
         };
     }

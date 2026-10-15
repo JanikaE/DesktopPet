@@ -16,19 +16,21 @@ public sealed record TodoSyncOperation(
     string Kind,
     string? Title,
     bool? IsCompleted,
-    DateTimeOffset CreatedAtUtc);
+    DateTimeOffset CreatedAtUtc,
+    Guid? ParentItemId = null);
 
 public sealed record TodoMaterializedItem(
     Guid ItemId,
     string Title,
     bool IsCompleted,
     DateTimeOffset CreatedAtUtc,
-    DateTimeOffset? DeletedAtUtc);
+    DateTimeOffset? DeletedAtUtc,
+    Guid? ParentItemId);
 
 public sealed class TodoReplicaFile
 {
     public const string ExpectedFormat = "desktop-pet.todo-replica";
-    public const int CurrentSchemaVersion = 1;
+    public const int CurrentSchemaVersion = 2;
 
     public string Format { get; init; } = ExpectedFormat;
     public int SchemaVersion { get; init; } = CurrentSchemaVersion;

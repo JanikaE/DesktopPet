@@ -213,7 +213,7 @@ public sealed class OneDriveSyncService : IDisposable
     {
         var replica = await TryReadReplicaAsync<TodoReplicaFile>(path, MaximumTodoReplicaFileSize);
         return replica is null || replica.Format != TodoReplicaFile.ExpectedFormat ||
-               replica.SchemaVersion != TodoReplicaFile.CurrentSchemaVersion || replica.ReplicaId == Guid.Empty ||
+               replica.SchemaVersion is < 1 or > TodoReplicaFile.CurrentSchemaVersion || replica.ReplicaId == Guid.Empty ||
                replica.Operations is null || replica.Operations.Count > MaximumOperationCount ||
                replica.Operations.Any(operation => operation is null || !TodoMergeEngine.IsValid(operation))
             ? null : replica;

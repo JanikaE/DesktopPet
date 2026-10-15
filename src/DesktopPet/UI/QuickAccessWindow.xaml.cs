@@ -18,7 +18,9 @@ public partial class QuickAccessWindow : Window
     private readonly LauncherDragDrop _launcherDragDrop;
     private readonly DispatcherTimer _noteSaveTimer;
     private readonly DispatcherTimer _clipboardToastTimer;
+    private readonly HashSet<Guid> _collapsedTodoIds = [];
     private NoteItem? _editingNote;
+    private Guid? _todoInputParentId;
     private bool _loadingNote;
 
     public QuickAccessWindow(DesktopPetRepository repository, Action openSettingsLauncher)
@@ -57,16 +59,75 @@ public partial class QuickAccessWindow : Window
 
     public void Refresh()
     {
-        TodoList.ItemsSource = _repository.GetTodos();
+        RefreshTodos();
         ClipboardList.ItemsSource = _repository.GetClipboardItems();
         NoteList.ItemsSource = _repository.GetNotes();
         LauncherList.ItemsSource = _repository.GetLaunchers();
     }
 
-    private void TodoTitleLostFocus(object sender, KeyboardFocusChangedEventArgs e) => CommitTodoInput();
+    private void RefreshTodos()
+    {
+        var todos = _repository.GetTodos();
+        var itemsById = todos.ToDictionary(item => item.Id);
+        var childrenByParent = new Dictionary<Guid, List<TodoItem>>();
+        var displayedAsChildren = new HashSet<Guid>();
+
+        foreach (var item in todos)
+        {
+            if (item.ParentId is not { } parentId ||
+                !itemsById.TryGetValue(parentId, out var parent) ||
+                parent.ParentId is not null)
+                continue;
+
+            if (!childrenByParent.TryGetValue(parentId, out var children))
+            {
+                children = [];
+                childrenByParent[parentId] = children;
+            }
+            children.Add(item);
+            displayedAsChildren.Add(item.Id);
+        }
+
+        _collapsedTodoIds.IntersectWith(childrenByParent.Keys);
+        var displayItems = new List<TodoDisplayItem>();
+        foreach (var root in todos.Where(item => !displayedAsChildren.Contains(item.Id)))
+        {
+            childrenByParent.TryGetValue(root.Id, out var children);
+            var hasChildren = children is { Count: > 0 };
+            var isExpanded = hasChildren && !_collapsedTodoIds.Contains(root.Id);
+            displayItems.Add(new TodoDisplayItem(
+                root,
+                false,
+                hasChildren,
+                isExpanded,
+                children?.Count(child => child.IsCompleted) ?? 0,
+                children?.Count ?? 0));
+            if (!isExpanded) continue;
+            displayItems.AddRange(children!.Select(child => new TodoDisplayItem(child, true, false, false, 0, 0)));
+        }
+
+        if (_todoInputParentId is { } inputParentId &&
+            (!itemsById.TryGetValue(inputParentId, out var inputParent) || inputParent.ParentId is not null))
+            ResetTodoInputMode(clearText: false);
+
+        TodoList.ItemsSource = displayItems;
+    }
+
+    private void TodoTitleLostFocus(object sender, KeyboardFocusChangedEventArgs e)
+    {
+        if (e.NewFocus is DependencyObject newFocus && IsWithin(newFocus, TodoInputModePanel)) return;
+        CommitTodoInput();
+    }
 
     private void TodoTitleKeyDown(object sender, KeyEventArgs e)
     {
+        if (e.Key == Key.Escape && _todoInputParentId is not null)
+        {
+            e.Handled = true;
+            ResetTodoInputMode(clearText: true);
+            return;
+        }
+
         if (e.Key is not (Key.Enter or Key.Return)) return;
         e.Handled = true;
         CommitTodoInput();
@@ -76,8 +137,48 @@ public partial class QuickAccessWindow : Window
     {
         var title = TodoTitleBox.Text.Trim();
         if (title.Length == 0) return;
-        _repository.AddTodo(title);
-        TodoTitleBox.Clear();
+        try
+        {
+            _repository.AddTodo(title, _todoInputParentId);
+            ResetTodoInputMode(clearText: true);
+        }
+        catch (InvalidOperationException exception)
+        {
+            ResetTodoInputMode(clearText: false);
+            MessageBox.Show(exception.Message, "DesktopPet");
+        }
+    }
+
+    private void AddSubTodo(object sender, RoutedEventArgs e)
+    {
+        if (GetContextMenuItem<TodoDisplayItem>(sender) is not { CanAddChild: true } displayItem) return;
+
+        CommitTodoInput();
+        _todoInputParentId = displayItem.Item.Id;
+        _collapsedTodoIds.Remove(displayItem.Item.Id);
+        TodoInputModeText.Text = $"添加到：{displayItem.Item.Title}";
+        TodoInputModePanel.Visibility = Visibility.Visible;
+        TodoTitleBox.ToolTip = "输入子待办，按回车或点击输入框外自动添加";
+        RefreshTodos();
+        Dispatcher.BeginInvoke(DispatcherPriority.Input, () => TodoTitleBox.Focus());
+    }
+
+    private void CancelSubTodoInput(object sender, RoutedEventArgs e) => ResetTodoInputMode(clearText: true);
+
+    private void ResetTodoInputMode(bool clearText)
+    {
+        _todoInputParentId = null;
+        TodoInputModeText.Text = string.Empty;
+        TodoInputModePanel.Visibility = Visibility.Collapsed;
+        TodoTitleBox.ToolTip = "输入待办，按回车或点击输入框外自动添加";
+        if (clearText) TodoTitleBox.Clear();
+    }
+
+    private void ToggleTodoExpansion(object sender, RoutedEventArgs e)
+    {
+        if (((FrameworkElement)sender).Tag is not TodoDisplayItem { HasChildren: true } displayItem) return;
+        if (!_collapsedTodoIds.Add(displayItem.Item.Id)) _collapsedTodoIds.Remove(displayItem.Item.Id);
+        RefreshTodos();
     }
 
     private void TodoChanged(object sender, RoutedEventArgs e)
@@ -90,7 +191,18 @@ public partial class QuickAccessWindow : Window
 
     private void DeleteTodo(object sender, RoutedEventArgs e)
     {
-        if (GetContextMenuItem<TodoItem>(sender) is { } item) _repository.DeleteTodo(item.Id);
+        if (GetContextMenuItem<TodoDisplayItem>(sender) is not { } displayItem) return;
+        var item = displayItem.Item;
+        var childCount = _repository.GetTodos().Count(todo => todo.ParentId == item.Id);
+        if (childCount > 0 && MessageBox.Show(
+                $"删除此待办会同时删除 {childCount} 个子待办，确定继续吗？",
+                "DesktopPet",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Warning) != MessageBoxResult.Yes)
+            return;
+
+        if (_todoInputParentId == item.Id) ResetTodoInputMode(clearText: true);
+        _repository.DeleteTodo(item.Id);
     }
 
     private void EditTodo(object sender, RoutedEventArgs e)
@@ -98,11 +210,13 @@ public partial class QuickAccessWindow : Window
         if (sender is not MenuItem menuItem ||
             LogicalTreeHelper.GetParent(menuItem) is not ContextMenu
             {
-                PlacementTarget: FrameworkElement { DataContext: TodoItem item } target
+                PlacementTarget: FrameworkElement { DataContext: TodoDisplayItem displayItem } target
             })
             return;
 
-        var display = FindVisualChild<CheckBox>(target, "TodoDisplay");
+        var item = displayItem.Item;
+
+        var display = FindVisualChild<Grid>(target, "TodoDisplay");
         var editor = FindVisualChild<TextBox>(target, "TodoEditor");
         if (display is null || editor is null) return;
 
@@ -144,7 +258,7 @@ public partial class QuickAccessWindow : Window
     private static void CancelTodoEdit(TextBox editor)
     {
         editor.Visibility = Visibility.Collapsed;
-        if (FindVisualChild<CheckBox>(editor.Parent, "TodoDisplay") is { } display)
+        if (FindVisualChild<Grid>(editor.Parent, "TodoDisplay") is { } display)
             display.Visibility = Visibility.Visible;
     }
 
@@ -174,7 +288,7 @@ public partial class QuickAccessWindow : Window
     private void WindowPreviewMouseDown(object sender, MouseButtonEventArgs e)
     {
         var source = e.OriginalSource as DependencyObject;
-        if (!IsWithin(source, TodoTitleBox)) CommitTodoInput();
+        if (!IsWithin(source, TodoInputArea) && !IsWithin(source, TodoInputModePanel)) CommitTodoInput();
         if (!IsWithin(source, ClipboardContentBox)) CommitClipboardInput();
     }
 
@@ -362,9 +476,23 @@ public partial class QuickAccessWindow : Window
     private void OpenSettingsLauncher(object sender, RoutedEventArgs e) => _openSettingsLauncher();
 
     private void RepositoryLaunchersChanged(object? sender, EventArgs e) => LauncherList.ItemsSource = _repository.GetLaunchers();
-    private void RepositoryTodosChanged(object? sender, EventArgs e) => Dispatcher.BeginInvoke(() => TodoList.ItemsSource = _repository.GetTodos());
+    private void RepositoryTodosChanged(object? sender, EventArgs e) => Dispatcher.BeginInvoke(RefreshTodos);
     private void RepositoryNotesChanged(object? sender, EventArgs e) => Dispatcher.BeginInvoke(() => NoteList.ItemsSource = _repository.GetNotes());
     private void LauncherPreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e) => _launcherDragDrop.PreviewMouseLeftButtonDown(e);
     private void LauncherPreviewMouseMove(object sender, MouseEventArgs e) => _launcherDragDrop.PreviewMouseMove(e);
     private void LauncherDrop(object sender, DragEventArgs e) => _launcherDragDrop.Drop(e);
+}
+
+public sealed record TodoDisplayItem(
+    TodoItem Item,
+    bool IsChild,
+    bool HasChildren,
+    bool IsExpanded,
+    int CompletedChildCount,
+    int ChildCount)
+{
+    public bool CanAddChild => !IsChild && Item.ParentId is null;
+    public Thickness ContentMargin => new(IsChild ? 14 : 0, 0, 0, 0);
+    public string ExpandGlyph => HasChildren ? IsExpanded ? "▾" : "▸" : string.Empty;
+    public string ProgressText => HasChildren ? $"{CompletedChildCount} / {ChildCount}" : string.Empty;
 }

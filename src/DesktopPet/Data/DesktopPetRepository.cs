@@ -8,7 +8,7 @@ namespace DesktopPet.Data;
 public sealed class DesktopPetRepository(string databasePath)
 {
     private const int MouseGridSchemaVersion = 1;
-    private const int CurrentSchemaVersion = 3;
+    private const int CurrentSchemaVersion = 4;
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
     private readonly string _connectionString = new SqliteConnectionStringBuilder { DataSource = databasePath }.ToString();
@@ -26,7 +26,10 @@ public sealed class DesktopPetRepository(string databasePath)
               id INTEGER PRIMARY KEY AUTOINCREMENT,
               title TEXT NOT NULL,
               is_completed INTEGER NOT NULL DEFAULT 0,
-              created_at TEXT NOT NULL
+              created_at TEXT NOT NULL,
+              sync_id TEXT NULL,
+              deleted_at TEXT NULL,
+              parent_sync_id TEXT NULL
             );
             CREATE TABLE IF NOT EXISTS launchers (
               id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -81,7 +84,8 @@ public sealed class DesktopPetRepository(string databasePath)
               kind TEXT NOT NULL,
               title TEXT NULL,
               is_completed INTEGER NULL,
-              created_at TEXT NOT NULL
+              created_at TEXT NOT NULL,
+              parent_item_sync_id TEXT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_todo_sync_operations_item ON todo_sync_operations(item_sync_id);
             CREATE TABLE IF NOT EXISTS notes (
@@ -130,20 +134,26 @@ public sealed class DesktopPetRepository(string databasePath)
         {
             using var connection = OpenConnection();
             using var command = connection.CreateCommand();
-            command.CommandText = "SELECT sync_id, title, is_completed FROM todos WHERE deleted_at IS NULL ORDER BY is_completed, created_at DESC, id DESC;";
+            command.CommandText = "SELECT sync_id, title, is_completed, parent_sync_id FROM todos WHERE deleted_at IS NULL ORDER BY is_completed, created_at DESC, id DESC;";
             using var reader = command.ExecuteReader();
             var results = new List<TodoItem>();
             while (reader.Read())
             {
                 if (!Guid.TryParse(reader.GetString(0), out var id)) continue;
-                results.Add(new TodoItem(id, reader.GetString(1), reader.GetBoolean(2)));
+                Guid? parentId = reader.IsDBNull(3) || !Guid.TryParse(reader.GetString(3), out var parsedParentId)
+                    ? null
+                    : parsedParentId;
+                results.Add(new TodoItem(id, reader.GetString(1), reader.GetBoolean(2), parentId));
             }
             return results;
         }
     }
 
-    public TodoItem AddTodo(string title)
+    public TodoItem AddTodo(string title, Guid? parentId = null)
     {
+        title = title.Trim();
+        if (title.Length == 0) throw new ArgumentException("待办内容不能为空。", nameof(title));
+
         var itemId = Guid.NewGuid();
         var createdAt = DateTimeOffset.UtcNow;
         lock (_todoGate)
@@ -153,18 +163,29 @@ public sealed class DesktopPetRepository(string databasePath)
             var deviceId = GetDeviceId(connection, transaction);
             var counter = NextTodoClock(connection, transaction);
 
+            if (parentId is not null)
+            {
+                using var parentCommand = connection.CreateCommand();
+                parentCommand.Transaction = transaction;
+                parentCommand.CommandText = "SELECT COUNT(*) FROM todos WHERE sync_id = $id AND parent_sync_id IS NULL AND deleted_at IS NULL;";
+                parentCommand.Parameters.AddWithValue("$id", parentId.Value.ToString("D"));
+                if (Convert.ToInt32(parentCommand.ExecuteScalar()) == 0)
+                    throw new InvalidOperationException("只能为仍然存在的顶级待办添加子待办。");
+            }
+
             using var command = connection.CreateCommand();
             command.Transaction = transaction;
-            command.CommandText = "INSERT INTO todos (sync_id, title, is_completed, created_at, deleted_at) VALUES ($id, $title, 0, $createdAt, NULL);";
+            command.CommandText = "INSERT INTO todos (sync_id, title, is_completed, created_at, deleted_at, parent_sync_id) VALUES ($id, $title, 0, $createdAt, NULL, $parentId);";
             command.Parameters.AddWithValue("$id", itemId.ToString("D"));
             command.Parameters.AddWithValue("$title", title);
             command.Parameters.AddWithValue("$createdAt", createdAt.ToString("O"));
+            command.Parameters.AddWithValue("$parentId", parentId is null ? DBNull.Value : parentId.Value.ToString("D"));
             command.ExecuteNonQuery();
-            InsertTodoOperation(connection, transaction, new TodoSyncOperation(Guid.NewGuid(), itemId, deviceId, counter, TodoSyncOperationKinds.Add, title, false, createdAt));
+            InsertTodoOperation(connection, transaction, new TodoSyncOperation(Guid.NewGuid(), itemId, deviceId, counter, TodoSyncOperationKinds.Add, title, false, createdAt, parentId));
             transaction.Commit();
         }
 
-        var item = new TodoItem(itemId, title, false);
+        var item = new TodoItem(itemId, title, false, parentId);
         TodosChanged?.Invoke(this, EventArgs.Empty);
         return item;
     }
@@ -176,23 +197,38 @@ public sealed class DesktopPetRepository(string databasePath)
         {
             using var connection = OpenConnection();
             using var transaction = connection.BeginTransaction();
-            using var readCommand = connection.CreateCommand();
-            readCommand.Transaction = transaction;
-            readCommand.CommandText = "SELECT is_completed FROM todos WHERE sync_id = $id AND deleted_at IS NULL;";
-            readCommand.Parameters.AddWithValue("$id", id.ToString("D"));
-            var current = readCommand.ExecuteScalar();
-            if (current is null || Convert.ToBoolean(current) == isCompleted) return;
-
-            using var updateCommand = connection.CreateCommand();
-            updateCommand.Transaction = transaction;
-            updateCommand.CommandText = "UPDATE todos SET is_completed = $completed WHERE sync_id = $id AND deleted_at IS NULL;";
-            updateCommand.Parameters.AddWithValue("$id", id.ToString("D"));
-            updateCommand.Parameters.AddWithValue("$completed", isCompleted);
-            changed = updateCommand.ExecuteNonQuery() > 0;
-            if (changed)
+            var affectedItems = new List<(Guid Id, bool IsCompleted)>();
+            using (var readCommand = connection.CreateCommand())
             {
-                var operation = new TodoSyncOperation(Guid.NewGuid(), id, GetDeviceId(connection, transaction), NextTodoClock(connection, transaction), TodoSyncOperationKinds.SetCompleted, null, isCompleted, DateTimeOffset.UtcNow);
-                InsertTodoOperation(connection, transaction, operation);
+                readCommand.Transaction = transaction;
+                readCommand.CommandText = isCompleted
+                    ? "SELECT sync_id, is_completed FROM todos WHERE deleted_at IS NULL AND (sync_id = $id OR parent_sync_id = $id);"
+                    : "SELECT sync_id, is_completed FROM todos WHERE deleted_at IS NULL AND sync_id = $id;";
+                readCommand.Parameters.AddWithValue("$id", id.ToString("D"));
+                using var reader = readCommand.ExecuteReader();
+                while (reader.Read())
+                {
+                    if (Guid.TryParse(reader.GetString(0), out var affectedId))
+                        affectedItems.Add((affectedId, reader.GetBoolean(1)));
+                }
+            }
+
+            if (affectedItems.All(item => item.IsCompleted == isCompleted)) return;
+
+            var deviceId = GetDeviceId(connection, transaction);
+            foreach (var item in affectedItems.Where(item => item.IsCompleted != isCompleted))
+            {
+                using var updateCommand = connection.CreateCommand();
+                updateCommand.Transaction = transaction;
+                updateCommand.CommandText = "UPDATE todos SET is_completed = $completed WHERE sync_id = $id AND deleted_at IS NULL;";
+                updateCommand.Parameters.AddWithValue("$id", item.Id.ToString("D"));
+                updateCommand.Parameters.AddWithValue("$completed", isCompleted);
+                if (updateCommand.ExecuteNonQuery() == 0) continue;
+
+                changed = true;
+                InsertTodoOperation(connection, transaction, new TodoSyncOperation(
+                    Guid.NewGuid(), item.Id, deviceId, NextTodoClock(connection, transaction),
+                    TodoSyncOperationKinds.SetCompleted, null, isCompleted, DateTimeOffset.UtcNow));
             }
             transaction.Commit();
         }
@@ -235,21 +271,39 @@ public sealed class DesktopPetRepository(string databasePath)
     public void DeleteTodo(Guid id)
     {
         var changed = false;
-        var deletedAt = DateTimeOffset.UtcNow;
         lock (_todoGate)
         {
             using var connection = OpenConnection();
             using var transaction = connection.BeginTransaction();
-            using var command = connection.CreateCommand();
-            command.Transaction = transaction;
-            command.CommandText = "UPDATE todos SET deleted_at = $deletedAt WHERE sync_id = $id AND deleted_at IS NULL;";
-            command.Parameters.AddWithValue("$id", id.ToString("D"));
-            command.Parameters.AddWithValue("$deletedAt", deletedAt.ToString("O"));
-            changed = command.ExecuteNonQuery() > 0;
-            if (changed)
+
+            var itemIds = new List<Guid>();
+            using (var readCommand = connection.CreateCommand())
             {
-                var operation = new TodoSyncOperation(Guid.NewGuid(), id, GetDeviceId(connection, transaction), NextTodoClock(connection, transaction), TodoSyncOperationKinds.Delete, null, null, deletedAt);
-                InsertTodoOperation(connection, transaction, operation);
+                readCommand.Transaction = transaction;
+                readCommand.CommandText = "SELECT sync_id FROM todos WHERE deleted_at IS NULL AND (sync_id = $id OR parent_sync_id = $id);";
+                readCommand.Parameters.AddWithValue("$id", id.ToString("D"));
+                using var reader = readCommand.ExecuteReader();
+                while (reader.Read())
+                {
+                    if (Guid.TryParse(reader.GetString(0), out var itemId)) itemIds.Add(itemId);
+                }
+            }
+
+            var deviceId = GetDeviceId(connection, transaction);
+            foreach (var itemId in itemIds)
+            {
+                var deletedAt = DateTimeOffset.UtcNow;
+                using var command = connection.CreateCommand();
+                command.Transaction = transaction;
+                command.CommandText = "UPDATE todos SET deleted_at = $deletedAt WHERE sync_id = $id AND deleted_at IS NULL;";
+                command.Parameters.AddWithValue("$id", itemId.ToString("D"));
+                command.Parameters.AddWithValue("$deletedAt", deletedAt.ToString("O"));
+                if (command.ExecuteNonQuery() == 0) continue;
+
+                changed = true;
+                InsertTodoOperation(connection, transaction, new TodoSyncOperation(
+                    Guid.NewGuid(), itemId, deviceId, NextTodoClock(connection, transaction),
+                    TodoSyncOperationKinds.Delete, null, null, deletedAt));
             }
             transaction.Commit();
         }
@@ -263,7 +317,7 @@ public sealed class DesktopPetRepository(string databasePath)
             using var connection = OpenConnection();
             using var command = connection.CreateCommand();
             command.CommandText = """
-                SELECT operation_id, item_sync_id, device_id, counter, kind, title, is_completed, created_at
+                SELECT operation_id, item_sync_id, device_id, counter, kind, title, is_completed, created_at, parent_item_sync_id
                 FROM todo_sync_operations
                 ORDER BY counter, device_id, operation_id;
                 """;
@@ -284,7 +338,8 @@ public sealed class DesktopPetRepository(string databasePath)
                     reader.GetString(4),
                     reader.IsDBNull(5) ? null : reader.GetString(5),
                     reader.IsDBNull(6) ? null : reader.GetBoolean(6),
-                    createdAt));
+                    createdAt,
+                    reader.IsDBNull(8) || !Guid.TryParse(reader.GetString(8), out var parentItemId) ? null : parentItemId));
             }
             return operations;
         }
@@ -789,6 +844,8 @@ public void RenameLauncher(long id, string name)
     {
         EnsureColumn(connection, "todos", "sync_id", "TEXT NULL");
         EnsureColumn(connection, "todos", "deleted_at", "TEXT NULL");
+        EnsureColumn(connection, "todos", "parent_sync_id", "TEXT NULL");
+        EnsureColumn(connection, "todo_sync_operations", "parent_item_sync_id", "TEXT NULL");
 
         using var transaction = connection.BeginTransaction();
         var deviceId = GetDeviceId(connection, transaction);
@@ -1059,8 +1116,8 @@ public void RenameLauncher(long id, string name)
         command.Transaction = transaction;
         command.CommandText = $"""
             INSERT {(ignoreExisting ? "OR IGNORE " : string.Empty)}INTO todo_sync_operations
-              (operation_id, item_sync_id, device_id, counter, kind, title, is_completed, created_at)
-            VALUES ($operationId, $itemId, $deviceId, $counter, $kind, $title, $completed, $createdAt);
+              (operation_id, item_sync_id, device_id, counter, kind, title, is_completed, created_at, parent_item_sync_id)
+            VALUES ($operationId, $itemId, $deviceId, $counter, $kind, $title, $completed, $createdAt, $parentItemId);
             """;
         command.Parameters.AddWithValue("$operationId", operation.OperationId.ToString("D"));
         command.Parameters.AddWithValue("$itemId", operation.ItemId.ToString("D"));
@@ -1070,6 +1127,7 @@ public void RenameLauncher(long id, string name)
         command.Parameters.AddWithValue("$title", (object?)operation.Title ?? DBNull.Value);
         command.Parameters.AddWithValue("$completed", operation.IsCompleted is null ? DBNull.Value : operation.IsCompleted.Value);
         command.Parameters.AddWithValue("$createdAt", operation.CreatedAtUtc.ToString("O"));
+        command.Parameters.AddWithValue("$parentItemId", operation.ParentItemId is null ? DBNull.Value : operation.ParentItemId.Value.ToString("D"));
         return command.ExecuteNonQuery();
     }
 
@@ -1079,7 +1137,7 @@ public void RenameLauncher(long id, string name)
         using (var readCommand = connection.CreateCommand())
         {
             readCommand.Transaction = transaction;
-            readCommand.CommandText = "SELECT operation_id, item_sync_id, device_id, counter, kind, title, is_completed, created_at FROM todo_sync_operations;";
+            readCommand.CommandText = "SELECT operation_id, item_sync_id, device_id, counter, kind, title, is_completed, created_at, parent_item_sync_id FROM todo_sync_operations;";
             using var reader = readCommand.ExecuteReader();
             while (reader.Read())
             {
@@ -1089,7 +1147,8 @@ public void RenameLauncher(long id, string name)
                     !DateTimeOffset.TryParse(reader.GetString(7), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var createdAt))
                     continue;
                 operations.Add(new TodoSyncOperation(operationId, itemId, deviceId, reader.GetInt64(3), reader.GetString(4),
-                    reader.IsDBNull(5) ? null : reader.GetString(5), reader.IsDBNull(6) ? null : reader.GetBoolean(6), createdAt));
+                    reader.IsDBNull(5) ? null : reader.GetString(5), reader.IsDBNull(6) ? null : reader.GetBoolean(6), createdAt,
+                    reader.IsDBNull(8) || !Guid.TryParse(reader.GetString(8), out var parentItemId) ? null : parentItemId));
             }
         }
 
@@ -1102,12 +1161,13 @@ public void RenameLauncher(long id, string name)
 
         using var insertCommand = connection.CreateCommand();
         insertCommand.Transaction = transaction;
-        insertCommand.CommandText = "INSERT INTO todos (sync_id, title, is_completed, created_at, deleted_at) VALUES ($id, $title, $completed, $createdAt, $deletedAt);";
+        insertCommand.CommandText = "INSERT INTO todos (sync_id, title, is_completed, created_at, deleted_at, parent_sync_id) VALUES ($id, $title, $completed, $createdAt, $deletedAt, $parentId);";
         var idParameter = insertCommand.Parameters.Add("$id", SqliteType.Text);
         var titleParameter = insertCommand.Parameters.Add("$title", SqliteType.Text);
         var completedParameter = insertCommand.Parameters.Add("$completed", SqliteType.Integer);
         var createdAtParameter = insertCommand.Parameters.Add("$createdAt", SqliteType.Text);
         var deletedAtParameter = insertCommand.Parameters.Add("$deletedAt", SqliteType.Text);
+        var parentIdParameter = insertCommand.Parameters.Add("$parentId", SqliteType.Text);
         foreach (var item in TodoMergeEngine.Materialize(operations))
         {
             idParameter.Value = item.ItemId.ToString("D");
@@ -1115,6 +1175,7 @@ public void RenameLauncher(long id, string name)
             completedParameter.Value = item.IsCompleted;
             createdAtParameter.Value = item.CreatedAtUtc.ToString("O");
             deletedAtParameter.Value = item.DeletedAtUtc is null ? DBNull.Value : item.DeletedAtUtc.Value.ToString("O");
+            parentIdParameter.Value = item.ParentItemId is null ? DBNull.Value : item.ParentItemId.Value.ToString("D");
             insertCommand.ExecuteNonQuery();
         }
     }
@@ -1136,7 +1197,7 @@ public void RenameLauncher(long id, string name)
     }
 }
 
-public sealed record TodoItem(Guid Id, string Title, bool IsCompleted);
+public sealed record TodoItem(Guid Id, string Title, bool IsCompleted, Guid? ParentId);
 public sealed record ClipboardItem(long Id, string Content);
 public sealed record NoteItem(
     Guid Id,
