@@ -761,6 +761,26 @@ public sealed class DesktopPetRepository(string databasePath)
         return new MouseDailyTotals(reader.GetDouble(0), reader.GetInt64(1), reader.GetInt64(2), reader.GetInt64(3), reader.GetInt64(4), reader.GetInt64(5));
     }
 
+    public IReadOnlyDictionary<DateOnly, MouseDailyTotals> GetMouseDailySeries(DateOnly? startDate, DateOnly? endDate)
+    {
+        using var connection = OpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText = $"SELECT stat_date, move_distance, left_clicks, right_clicks, middle_clicks, wheel_units, double_clicks FROM mouse_daily{DateFilter(startDate, endDate, command)} ORDER BY stat_date;";
+        using var reader = command.ExecuteReader();
+        var results = new Dictionary<DateOnly, MouseDailyTotals>();
+        while (reader.Read() && DateOnly.TryParse(reader.GetString(0), out var date))
+        {
+            results[date] = new MouseDailyTotals(
+                reader.GetDouble(1),
+                reader.GetInt64(2),
+                reader.GetInt64(3),
+                reader.GetInt64(4),
+                reader.GetInt64(5),
+                reader.GetInt64(6));
+        }
+        return results;
+    }
+
     public IReadOnlyList<DateOnly> GetMouseStatisticDates()
     {
         using var connection = OpenConnection();

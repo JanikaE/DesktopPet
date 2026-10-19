@@ -40,7 +40,7 @@ public partial class MainWindow : Window
     public HotkeyGesture? ToggleVisibilityHotkey { get; private set; }
     public HotkeyGesture? KeyboardStatisticsHotkey { get; private set; }
     public HotkeyGesture? MouseStatisticsHotkey { get; private set; }
-    public bool[] MouseLegendHidden { get; private set; } = [false, false, false, false];
+    public bool[] MouseLegendHidden { get; private set; } = [false, false, false, false, false];
     public string KeyboardLayoutId { get; private set; } = "full-size-104";
     public string SelectedPetId { get; private set; }
 
@@ -282,7 +282,14 @@ public partial class MainWindow : Window
             ToggleVisibilityHotkey = placement.Hotkey;
             KeyboardStatisticsHotkey = placement.KeyboardStatisticsHotkey;
             MouseStatisticsHotkey = placement.MouseStatisticsHotkey;
-            if (placement.MouseLegendHidden is { Length: 4 } legendHidden) MouseLegendHidden = legendHidden;
+            if (placement.MouseLegendHidden is { Length: 5 } legendHidden)
+            {
+                MouseLegendHidden = legendHidden;
+            }
+            else if (placement.MouseLegendHidden is { Length: 4 } legacyLegendHidden)
+            {
+                MouseLegendHidden = [.. legacyLegendHidden, false];
+            }
             KeyboardLayoutId = placement.KeyboardLayoutId;
             SetPetTopmost(placement.Topmost);
         }
