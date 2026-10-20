@@ -23,8 +23,9 @@ public partial class MouseStatisticsWindow : Window
     private const double PlotPadding = 4;
     private const double TrendPlotLeft = 48;
     private const double TrendPlotTop = 18;
-    private const double TrendPlotRight = 14;
-    private const double TrendPlotBottom = 32;
+    private const double TrendNormalizedPlotRight = 44;
+    private const double TrendDualAxisPlotRight = 62;
+    private const double TrendPlotBottom = 40;
     private const int MaxTrailPoints = 45;
     private static readonly TimeSpan TrailDuration = TimeSpan.FromSeconds(1.8);
     private static readonly TimeSpan LiveRepaintInterval = TimeSpan.FromMilliseconds(400);
@@ -73,6 +74,7 @@ public partial class MouseStatisticsWindow : Window
     private bool _trendDirty = true;
     private bool _trendRenderPending;
     private bool _trendRangeValid;
+    private bool _useDualTrendAxes;
     private int _referenceWidth = 1;
     private int _referenceHeight = 1;
     private double _mapWidth = MaxMapWidth;
@@ -111,6 +113,7 @@ public partial class MouseStatisticsWindow : Window
         BuildLegend();
         BuildTrendLegend();
         UpdateLegendCounts();
+        UpdateTrendScaleModeAppearance();
         UpdateViewState();
         Loaded += OnLoaded;
         UpdateMapLayout();
@@ -362,6 +365,23 @@ public partial class MouseStatisticsWindow : Window
         RequestTrendRender();
     }
 
+    private void ToggleTrendScaleMode(object sender, RoutedEventArgs e)
+    {
+        _useDualTrendAxes = !_useDualTrendAxes;
+        UpdateTrendScaleModeAppearance();
+        _trendDirty = true;
+        RequestTrendRender();
+    }
+
+    private void UpdateTrendScaleModeAppearance()
+    {
+        TrendScaleHint.Text = _useDualTrendAxes ? "左：次数 / 格数　右：移动距离" : "各项按自身峰值缩放";
+        TrendScaleModeButton.ToolTip = _useDualTrendAxes ? "切换到各项相对峰值" : "切换到双纵轴实际值";
+        TrendScaleModeButton.Background = new SolidColorBrush(_useDualTrendAxes ? AccentColor : Color.FromRgb(244, 239, 248));
+        TrendScaleModeButton.BorderBrush = new SolidColorBrush(_useDualTrendAxes ? AccentColor : Color.FromRgb(205, 191, 224));
+        TrendScaleIcon.Stroke = new SolidColorBrush(_useDualTrendAxes ? Colors.White : Color.FromRgb(101, 86, 127));
+    }
+
     private void UpdateViewState()
     {
         MapHost.Visibility = _showingTrend ? Visibility.Collapsed : Visibility.Visible;
@@ -458,7 +478,8 @@ public partial class MouseStatisticsWindow : Window
         TrendHoverCanvas.Children.Clear();
         var width = TrendCanvas.ActualWidth;
         var height = TrendCanvas.ActualHeight;
-        if (width < TrendPlotLeft + TrendPlotRight + 20 || height < TrendPlotTop + TrendPlotBottom + 20) return;
+        var plotRight = CurrentTrendPlotRight;
+        if (width < TrendPlotLeft + plotRight + 20 || height < TrendPlotTop + TrendPlotBottom + 20) return;
         _trendDirty = false;
 
         if (!_trendRangeValid || !HasAnyTrendData())
@@ -472,7 +493,7 @@ public partial class MouseStatisticsWindow : Window
             return;
         }
 
-        var plotWidth = width - TrendPlotLeft - TrendPlotRight;
+        var plotWidth = width - TrendPlotLeft - plotRight;
         var plotHeight = height - TrendPlotTop - TrendPlotBottom;
         var maxima = GetTrendMaxima();
         if (!Enumerable.Range(0, TrendColors.Length).Any(index => _visibleButtons[index] && maxima[index] > 0))
@@ -480,14 +501,17 @@ public partial class MouseStatisticsWindow : Window
             AddTrendEmptyMessage(width, height, "所选项目在该范围暂无记录");
             return;
         }
+        var (countAxisMaximum, distanceAxisMaximumMeters) = GetDualAxisMaximums(maxima);
         const int yDivisions = 4;
         for (var index = 0; index <= yDivisions; index++)
         {
             var y = TrendPlotTop + plotHeight - index * plotHeight / yDivisions;
-            TrendCanvas.Children.Add(new Line { X1 = TrendPlotLeft, X2 = width - TrendPlotRight, Y1 = y, Y2 = y, Stroke = new SolidColorBrush(Color.FromRgb(225, 217, 235)), StrokeThickness = 1 });
+            TrendCanvas.Children.Add(new Line { X1 = TrendPlotLeft, X2 = width - plotRight, Y1 = y, Y2 = y, Stroke = new SolidColorBrush(Color.FromRgb(225, 217, 235)), StrokeThickness = 1 });
             var label = new TextBlock
             {
-                Text = $"{index * 25}%",
+                Text = _useDualTrendAxes
+                    ? CompactCountFormatter.Format((long)Math.Round(countAxisMaximum * index / yDivisions))
+                    : $"{index * 25}%",
                 Foreground = new SolidColorBrush(Color.FromRgb(137, 127, 150)),
                 FontSize = 10,
                 Width = TrendPlotLeft - 7,
@@ -496,6 +520,21 @@ public partial class MouseStatisticsWindow : Window
             Canvas.SetLeft(label, 0);
             Canvas.SetTop(label, y - 7);
             TrendCanvas.Children.Add(label);
+
+            if (_useDualTrendAxes)
+            {
+                var distanceLabel = new TextBlock
+                {
+                    Text = FormatDistanceAxisValue(distanceAxisMaximumMeters * index / yDivisions, distanceAxisMaximumMeters),
+                    Foreground = new SolidColorBrush(Color.FromRgb(137, 127, 150)),
+                    FontSize = 10,
+                    Width = plotRight - 5,
+                    TextAlignment = TextAlignment.Left
+                };
+                Canvas.SetLeft(distanceLabel, width - plotRight + 5);
+                Canvas.SetTop(distanceLabel, y - 7);
+                TrendCanvas.Children.Add(distanceLabel);
+            }
         }
 
         foreach (var tick in GetTrendHorizontalTicks(plotWidth))
@@ -503,7 +542,7 @@ public partial class MouseStatisticsWindow : Window
             var x = TrendDateX(tick, plotWidth);
             TrendCanvas.Children.Add(new Line { X1 = x, X2 = x, Y1 = TrendPlotTop, Y2 = TrendPlotTop + plotHeight, Stroke = new SolidColorBrush(Color.FromRgb(225, 217, 235)), StrokeThickness = 1, Opacity = .65 });
             var label = new TextBlock { Text = FormatTrendHorizontalTick(tick), Foreground = new SolidColorBrush(Color.FromRgb(137, 127, 150)), FontSize = 10, Width = 68, TextAlignment = TextAlignment.Center };
-            Canvas.SetLeft(label, Math.Clamp(x - 34, 0, Math.Max(0, width - 68)));
+            Canvas.SetLeft(label, Math.Clamp(x - 34, 0, Math.Max(0, width - plotRight - 68)));
             Canvas.SetTop(label, TrendPlotTop + plotHeight + 7);
             TrendCanvas.Children.Add(label);
         }
@@ -519,17 +558,17 @@ public partial class MouseStatisticsWindow : Window
             };
             foreach (var (date, value) in BuildTrendSeries(index))
             {
-                var normalized = value / maxima[index];
-                polyline.Points.Add(new Point(TrendDateX(date, plotWidth), TrendValueY(normalized, plotHeight)));
+                var ratio = TrendPlotRatio(value, index, maxima, countAxisMaximum, distanceAxisMaximumMeters);
+                polyline.Points.Add(new Point(TrendDateX(date, plotWidth), TrendValueY(ratio, plotHeight)));
             }
             TrendCanvas.Children.Add(polyline);
 
             if (_trendStart == _trendEnd)
             {
-                var normalized = TrendValue(DailyTotals(_trendStart), index) / maxima[index];
+                var ratio = TrendPlotRatio(TrendValue(DailyTotals(_trendStart), index), index, maxima, countAxisMaximum, distanceAxisMaximumMeters);
                 var dot = new Ellipse { Width = 7, Height = 7, Fill = new SolidColorBrush(TrendColors[index]), Stroke = Brushes.White, StrokeThickness = 1 };
                 Canvas.SetLeft(dot, TrendDateX(_trendStart, plotWidth) - 3.5);
-                Canvas.SetTop(dot, TrendValueY(normalized, plotHeight) - 3.5);
+                Canvas.SetTop(dot, TrendValueY(ratio, plotHeight) - 3.5);
                 TrendCanvas.Children.Add(dot);
             }
         }
@@ -566,6 +605,42 @@ public partial class MouseStatisticsWindow : Window
             for (var index = 0; index < maxima.Length; index++) maxima[index] = Math.Max(maxima[index], TrendValue(totals, index));
         }
         return maxima;
+    }
+
+    private double CurrentTrendPlotRight => _useDualTrendAxes ? TrendDualAxisPlotRight : TrendNormalizedPlotRight;
+
+    private (double Count, double DistanceMeters) GetDualAxisMaximums(IReadOnlyList<double> maxima)
+    {
+        var maximumCount = 0d;
+        for (var index = 0; index < ButtonColors.Length; index++)
+            if (_visibleButtons[index]) maximumCount = Math.Max(maximumCount, maxima[index]);
+        var maximumDistance = _visibleButtons[^1] ? PixelsToMeters(maxima[^1]) : 0;
+        return (NiceTrendAxisMaximum(maximumCount, 4), NiceTrendAxisMaximum(maximumDistance, 0));
+    }
+
+    private double TrendPlotRatio(
+        double value,
+        int index,
+        IReadOnlyList<double> maxima,
+        double countAxisMaximum,
+        double distanceAxisMaximumMeters)
+    {
+        if (!_useDualTrendAxes) return value / Math.Max(1, maxima[index]);
+        return index == TrendColors.Length - 1
+            ? PixelsToMeters(value) / Math.Max(double.Epsilon, distanceAxisMaximumMeters)
+            : value / Math.Max(1, countAxisMaximum);
+    }
+
+    private static double NiceTrendAxisMaximum(double maximum, double minimum)
+    {
+        maximum = Math.Max(maximum, minimum);
+        if (maximum <= 0) return 1;
+        var roughStep = maximum / 4;
+        var magnitude = Math.Pow(10, Math.Floor(Math.Log10(roughStep)));
+        var normalized = roughStep / magnitude;
+        var nice = normalized <= 1 ? 1 : normalized <= 2 ? 2 : normalized <= 5 ? 5 : 10;
+        var step = nice * magnitude;
+        return Math.Ceiling(maximum / step) * step;
     }
 
     private IReadOnlyList<(DateOnly Date, double Value)> BuildTrendSeries(int index)
@@ -689,7 +764,8 @@ public partial class MouseStatisticsWindow : Window
         if (!_showingTrend || !_trendRangeValid || !HasAnyTrendData() || !_visibleButtons.Any(visible => visible)) return;
         var width = TrendHoverCanvas.ActualWidth;
         var height = TrendHoverCanvas.ActualHeight;
-        var plotWidth = width - TrendPlotLeft - TrendPlotRight;
+        var plotRight = CurrentTrendPlotRight;
+        var plotWidth = width - TrendPlotLeft - plotRight;
         var plotHeight = height - TrendPlotTop - TrendPlotBottom;
         if (plotWidth <= 0 || plotHeight <= 0) return;
         if (pointer.X < TrendPlotLeft || pointer.X > TrendPlotLeft + plotWidth || pointer.Y < TrendPlotTop || pointer.Y > TrendPlotTop + plotHeight) return;
@@ -699,6 +775,7 @@ public partial class MouseStatisticsWindow : Window
         var date = _trendStart.AddDays(Math.Clamp(dayOffset, 0, span));
         var totals = DailyTotals(date);
         var maxima = GetTrendMaxima();
+        var (countAxisMaximum, distanceAxisMaximumMeters) = GetDualAxisMaximums(maxima);
         var x = TrendDateX(date, plotWidth);
         TrendHoverCanvas.Children.Add(new Line { X1 = x, X2 = x, Y1 = TrendPlotTop, Y2 = TrendPlotTop + plotHeight, Stroke = new SolidColorBrush(AccentColor), StrokeThickness = 1, Opacity = .65 });
 
@@ -710,7 +787,8 @@ public partial class MouseStatisticsWindow : Window
             var value = TrendValue(totals, index);
             if (maxima[index] > 0)
             {
-                var y = TrendValueY(value / maxima[index], plotHeight);
+                var ratio = TrendPlotRatio(value, index, maxima, countAxisMaximum, distanceAxisMaximumMeters);
+                var y = TrendValueY(ratio, plotHeight);
                 var dot = new Ellipse { Width = 7, Height = 7, Fill = new SolidColorBrush(TrendColors[index]), Stroke = Brushes.White, StrokeThickness = 1 };
                 Canvas.SetLeft(dot, x - 3.5);
                 Canvas.SetTop(dot, y - 3.5);
@@ -959,9 +1037,14 @@ public partial class MouseStatisticsWindow : Window
 
     private static string FormatDistance(double pixels)
     {
-        var meters = pixels / 96.0 * 0.0254;
+        var meters = PixelsToMeters(pixels);
         return meters >= 1000 ? $"{meters / 1000:0.00} km" : $"{meters:0.0} m";
     }
+
+    private static double PixelsToMeters(double pixels) => pixels / 96.0 * 0.0254;
+
+    private static string FormatDistanceAxisValue(double meters, double axisMaximumMeters) =>
+        axisMaximumMeters >= 1000 ? $"{meters / 1000:0.##} km" : $"{meters:0.###} m";
 
     private static int PlotBoundary(int index, int pixels, int cells)
     {

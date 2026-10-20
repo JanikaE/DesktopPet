@@ -61,7 +61,12 @@
                 <Grid>
                     <Canvas x:Name="TrendCanvas" ClipToBounds="True" IsHitTestVisible="False"/>
                     <Canvas x:Name="TrendHoverCanvas" Background="Transparent" ClipToBounds="True" MouseMove="TrendMouseMove" MouseLeave="TrendMouseLeave"/>
-                    <TextBlock Margin="8,5" HorizontalAlignment="Right" VerticalAlignment="Top" FontSize="10" Foreground="#897F96" IsHitTestVisible="False" Text="各项按自身峰值缩放"/>
+                    <TextBlock x:Name="TrendScaleHint" Margin="8,5" HorizontalAlignment="Right" VerticalAlignment="Top" FontSize="10" Foreground="#897F96" IsHitTestVisible="False" Text="各项按自身峰值缩放"/>
+                    <Button x:Name="TrendScaleModeButton" Panel.ZIndex="3" Width="26" Height="26" Margin="0,0,6,6" Padding="4" HorizontalAlignment="Right" VerticalAlignment="Bottom" ToolTip="切换到双纵轴实际值" Click="ToggleTrendScaleMode">
+                        <Viewbox Width="15" Height="15" IsHitTestVisible="False">
+                            <Path x:Name="TrendScaleIcon" Width="16" Height="16" Data="M 2,2 L 2,14 M 14,2 L 14,14 M 4,12 L 7,8 L 10,10 L 12,5" Stroke="#65567F" StrokeThickness="1.5" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"/>
+                        </Viewbox>
+                    </Button>
                 </Grid>
             </Border>
             <Grid Grid.Row="2" Margin="0,8,0,0">
