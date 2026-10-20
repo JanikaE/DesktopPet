@@ -53,6 +53,11 @@
                     <Grid>
                         <Canvas x:Name="TrendCanvas" ClipToBounds="True" IsHitTestVisible="False"/>
                         <Canvas x:Name="TrendHoverCanvas" Background="Transparent" ClipToBounds="True" MouseMove="TrendMouseMove" MouseLeave="TrendMouseLeave"/>
+                        <Button x:Name="TrendChartTypeButton" Width="28" Height="28" Margin="12,0,0,8" Padding="5" HorizontalAlignment="Left" VerticalAlignment="Bottom" Panel.ZIndex="1" AutomationProperties.Name="切换图表类型" Click="ToggleTrendChartType">
+                            <Viewbox Width="16" Height="16" Stretch="Uniform">
+                                <Path x:Name="TrendChartTypeIcon" Width="18" Height="16" Fill="Transparent" Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" StrokeThickness="1.6" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"/>
+                            </Viewbox>
+                        </Button>
                     </Grid>
                 </Border>
             </Grid>

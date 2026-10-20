@@ -22,6 +22,8 @@ public partial class KeyboardStatisticsWindow : Window
     private static readonly Color AccentColor = Color.FromRgb(141, 122, 184);
     private static readonly SolidColorBrush MutedBrush = new(Color.FromRgb(137, 127, 150));
     private static readonly SolidColorBrush GridBrush = new(Color.FromRgb(225, 217, 235));
+    private static readonly Geometry BarChartIconGeometry = Geometry.Parse("M 1,14 L 17,14 M 3,12 L 3,8 L 6,8 L 6,12 M 8,12 L 8,5 L 11,5 L 11,12 M 13,12 L 13,2 L 16,2 L 16,12");
+    private static readonly Geometry LineChartIconGeometry = Geometry.Parse("M 1,14 L 17,14 M 3,11 L 7,7 L 10,9 L 15,3");
     private readonly DesktopPetRepository _repository;
     private readonly Action _flushPending;
     private readonly Action<string> _saveLayout;
@@ -37,6 +39,7 @@ public partial class KeyboardStatisticsWindow : Window
     private bool _updatingLayout;
     private bool _liveRange;
     private bool _showingTrend;
+    private bool _showTrendBars;
     private bool _trendRenderPending;
     private bool _trendRangeValid;
     private long _maximum = 1;
@@ -217,14 +220,30 @@ public partial class KeyboardStatisticsWindow : Window
         RequestTrendRender();
     }
 
+    private void ToggleTrendChartType(object sender, RoutedEventArgs e)
+    {
+        _showTrendBars = !_showTrendBars;
+        UpdateTrendChartTypeButton();
+        RequestTrendRender();
+    }
+
     private void UpdateViewState()
     {
         KeyboardGrid.Visibility = _showingTrend ? Visibility.Collapsed : Visibility.Visible;
         TrendHost.Visibility = _showingTrend ? Visibility.Visible : Visibility.Collapsed;
-        LayoutBox.Visibility = _showingTrend ? Visibility.Collapsed : Visibility.Visible;
+        LayoutBox.Visibility = _showingTrend ? Visibility.Hidden : Visibility.Visible;
         SetViewButtonAppearance(DistributionViewButton, !_showingTrend);
         SetViewButtonAppearance(TrendViewButton, _showingTrend);
+        UpdateTrendChartTypeButton();
         if (!_showingTrend) ApplyCounts();
+    }
+
+    private void UpdateTrendChartTypeButton()
+    {
+        TrendChartTypeIcon.Data = _showTrendBars ? LineChartIconGeometry : BarChartIconGeometry;
+        TrendChartTypeButton.ToolTip = _showTrendBars
+            ? "切换为折线图（当前：柱状图）"
+            : "切换为柱状图（当前：折线图）";
     }
 
     private static void SetViewButtonAppearance(Button button, bool selected)
@@ -333,7 +352,7 @@ public partial class KeyboardStatisticsWindow : Window
 
         foreach (var tick in GetHorizontalTicks(plotWidth))
         {
-            var x = DateX(tick, plotWidth);
+            var x = TrendDateX(tick, plotWidth);
             TrendCanvas.Children.Add(new Line { X1 = x, X2 = x, Y1 = PlotTop, Y2 = PlotTop + plotHeight, Stroke = GridBrush, StrokeThickness = 1, Opacity = .65 });
             var label = new TextBlock { Text = FormatHorizontalTick(tick), Foreground = MutedBrush, FontSize = 10, Width = 68, TextAlignment = TextAlignment.Center };
             Canvas.SetLeft(label, Math.Clamp(x - 34, 0, Math.Max(0, width - 68)));
@@ -341,6 +360,12 @@ public partial class KeyboardStatisticsWindow : Window
             TrendCanvas.Children.Add(label);
         }
 
+        if (_showTrendBars) RenderTrendBars(plotWidth, plotHeight);
+        else RenderTrendLine(plotWidth, plotHeight);
+    }
+
+    private void RenderTrendLine(double plotWidth, double plotHeight)
+    {
         var series = BuildTrendSeries();
         var polyline = new Polyline
         {
@@ -360,6 +385,45 @@ public partial class KeyboardStatisticsWindow : Window
             Canvas.SetTop(dot, ValueY(count, plotHeight) - 4);
             TrendCanvas.Children.Add(dot);
         }
+    }
+
+    private void RenderTrendBars(double plotWidth, double plotHeight)
+    {
+        var dayCount = _trendEnd.DayNumber - _trendStart.DayNumber + 1;
+        var slotWidth = plotWidth / dayCount;
+        var barWidth = Math.Clamp(slotWidth * .72, 1, 24);
+        var baseline = PlotTop + plotHeight;
+        foreach (var (date, count) in BuildTrendBarSeries())
+        {
+            var y = ValueY(count, plotHeight);
+            var bar = new Rectangle
+            {
+                Width = barWidth,
+                Height = Math.Max(1, baseline - y),
+                RadiusX = Math.Min(3, barWidth / 2),
+                RadiusY = Math.Min(3, barWidth / 2),
+                Fill = new SolidColorBrush(AccentColor),
+                Opacity = .84
+            };
+            Canvas.SetLeft(bar, BarDateX(date, plotWidth) - barWidth / 2);
+            Canvas.SetTop(bar, baseline - bar.Height);
+            TrendCanvas.Children.Add(bar);
+        }
+    }
+
+    private IReadOnlyList<(DateOnly Date, long Count)> BuildTrendBarSeries()
+    {
+        var values = new SortedDictionary<DateOnly, long>();
+        foreach (var (date, count) in _dailyTotals)
+            if (date >= _trendStart && date <= _trendEnd && count > 0) values[date] = count;
+
+        if (_todayAtRefresh >= _trendStart && _todayAtRefresh <= _trendEnd)
+        {
+            var live = _liveIncrements.Values.Sum();
+            if (live > 0) values[_todayAtRefresh] = values.GetValueOrDefault(_todayAtRefresh) + live;
+        }
+
+        return values.Select(pair => (pair.Key, pair.Value)).ToArray();
     }
 
     private IReadOnlyList<(DateOnly Date, long Count)> BuildTrendSeries()
@@ -478,6 +542,15 @@ public partial class KeyboardStatisticsWindow : Window
         return span == 0 ? PlotLeft + plotWidth / 2 : PlotLeft + (date.DayNumber - _trendStart.DayNumber) * plotWidth / span;
     }
 
+    private double BarDateX(DateOnly date, double plotWidth)
+    {
+        var dayCount = _trendEnd.DayNumber - _trendStart.DayNumber + 1;
+        return PlotLeft + (date.DayNumber - _trendStart.DayNumber + .5) * plotWidth / dayCount;
+    }
+
+    private double TrendDateX(DateOnly date, double plotWidth) =>
+        _showTrendBars ? BarDateX(date, plotWidth) : DateX(date, plotWidth);
+
     private double ValueY(long value, double plotHeight) => PlotTop + plotHeight * (1 - value / (double)Math.Max(1, _trendAxisMaximum));
 
     private void TrendMouseMove(object sender, MouseEventArgs e)
@@ -493,10 +566,12 @@ public partial class KeyboardStatisticsWindow : Window
         if (pointer.X < PlotLeft || pointer.X > PlotLeft + plotWidth || pointer.Y < PlotTop || pointer.Y > PlotTop + plotHeight) return;
 
         var span = _trendEnd.DayNumber - _trendStart.DayNumber;
-        var dayOffset = span == 0 ? 0 : (int)Math.Round((pointer.X - PlotLeft) / plotWidth * span);
+        var dayOffset = _showTrendBars
+            ? (int)Math.Floor((pointer.X - PlotLeft) / plotWidth * (span + 1))
+            : span == 0 ? 0 : (int)Math.Round((pointer.X - PlotLeft) / plotWidth * span);
         var date = _trendStart.AddDays(Math.Clamp(dayOffset, 0, span));
         var count = DailyCount(date);
-        var x = DateX(date, plotWidth);
+        var x = TrendDateX(date, plotWidth);
         var y = ValueY(count, plotHeight);
         TrendHoverCanvas.Children.Add(new Line { X1 = x, X2 = x, Y1 = PlotTop, Y2 = PlotTop + plotHeight, Stroke = new SolidColorBrush(AccentColor), StrokeThickness = 1, Opacity = .65 });
         var dot = new Ellipse { Width = 8, Height = 8, Fill = new SolidColorBrush(AccentColor), Stroke = Brushes.White, StrokeThickness = 1.5 };
@@ -699,11 +774,11 @@ public partial class KeyboardStatisticsWindow : Window
             foreach (var key in row)
             {
                 if (key.KeyCode is null) { rowPanel.Children.Add(new Border { Width = KeyWidth * key.Width }); continue; }
-                var countText = new TextBlock { FontSize = 10, Foreground = new SolidColorBrush(Color.FromRgb(101,86,127)), HorizontalAlignment = HorizontalAlignment.Center };
+                var countText = new TextBlock { FontSize = 10, Foreground = new SolidColorBrush(Color.FromRgb(101, 86, 127)), HorizontalAlignment = HorizontalAlignment.Center };
                 var content = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
                 content.Children.Add(new TextBlock { Text = key.Label, FontSize = 10, HorizontalAlignment = HorizontalAlignment.Center });
                 content.Children.Add(countText);
-                var border = new Border { Width = KeyWidth * key.Width - 3, Height = 39, Margin = new Thickness(1.5), CornerRadius = new CornerRadius(5), BorderBrush = new SolidColorBrush(Color.FromRgb(205,191,224)), BorderThickness = new Thickness(1), Child = content, RenderTransform = new ScaleTransform(1, 1), RenderTransformOrigin = new Point(0.5, 0.5) };
+                var border = new Border { Width = KeyWidth * key.Width - 3, Height = 39, Margin = new Thickness(1.5), CornerRadius = new CornerRadius(5), BorderBrush = new SolidColorBrush(Color.FromRgb(205, 191, 224)), BorderThickness = new Thickness(1), Child = content, RenderTransform = new ScaleTransform(1, 1), RenderTransformOrigin = new Point(0.5, 0.5) };
                 rowPanel.Children.Add(border);
                 if (!_keyViews.TryGetValue(key.KeyCode.Value, out var views)) _keyViews[key.KeyCode.Value] = views = [];
                 views.Add(border);
