@@ -16,6 +16,7 @@ public partial class QuickAccessWindow : Window
     private readonly DesktopPetRepository _repository;
     private readonly Action _openSettingsLauncher;
     private readonly LauncherDragDrop _launcherDragDrop;
+    private readonly TodoDragDrop _todoDragDrop;
     private readonly DispatcherTimer _noteSaveTimer;
     private readonly DispatcherTimer _clipboardToastTimer;
     private readonly HashSet<Guid> _collapsedTodoIds = [];
@@ -30,6 +31,7 @@ public partial class QuickAccessWindow : Window
         _repository = repository;
         _openSettingsLauncher = openSettingsLauncher;
         _launcherDragDrop = new LauncherDragDrop(LauncherList, repository);
+        _todoDragDrop = new TodoDragDrop(TodoList, repository, TodoDragFinished);
         _noteSaveTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
         _noteSaveTimer.Tick += (_, _) => CommitNote();
         _clipboardToastTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1.5) };
@@ -65,8 +67,17 @@ public partial class QuickAccessWindow : Window
         LauncherList.ItemsSource = _repository.GetLaunchers();
     }
 
+    private void TodoDragFinished(Guid? parentId)
+    {
+        if (parentId is { } id) _collapsedTodoIds.Remove(id);
+        if (!_todoDragDrop.IsDragging) RefreshTodos();
+    }
+
     private void RefreshTodos()
     {
+        if (_todoDragDrop.IsDragging) return;
+        var scroll = TodoDragDrop.ScrollViewerOf(TodoList);
+        var offset = scroll?.VerticalOffset ?? 0;
         var todos = _repository.GetTodos();
         var itemsById = todos.ToDictionary(item => item.Id);
         var childrenByParent = new Dictionary<Guid, List<TodoItem>>();
@@ -111,6 +122,8 @@ public partial class QuickAccessWindow : Window
             ResetTodoInputMode(clearText: false);
 
         TodoList.ItemsSource = displayItems;
+        TodoList.UpdateLayout();
+        scroll?.ScrollToVerticalOffset(offset);
     }
 
     private void TodoTitleLostFocus(object sender, KeyboardFocusChangedEventArgs e)

@@ -5,6 +5,7 @@ public static class TodoSyncOperationKinds
     public const string Add = "add";
     public const string SetTitle = "setTitle";
     public const string SetCompleted = "setCompleted";
+    public const string Move = "move";
     public const string Delete = "delete";
 }
 
@@ -17,7 +18,8 @@ public sealed record TodoSyncOperation(
     string? Title,
     bool? IsCompleted,
     DateTimeOffset CreatedAtUtc,
-    Guid? ParentItemId = null);
+    Guid? ParentItemId = null,
+    string? SortKey = null);
 
 public sealed record TodoMaterializedItem(
     Guid ItemId,
@@ -25,12 +27,13 @@ public sealed record TodoMaterializedItem(
     bool IsCompleted,
     DateTimeOffset CreatedAtUtc,
     DateTimeOffset? DeletedAtUtc,
-    Guid? ParentItemId);
+    Guid? ParentItemId,
+    string SortKey);
 
 public sealed class TodoReplicaFile
 {
     public const string ExpectedFormat = "desktop-pet.todo-replica";
-    public const int CurrentSchemaVersion = 2;
+    public const int CurrentSchemaVersion = 3;
 
     public string Format { get; init; } = ExpectedFormat;
     public int SchemaVersion { get; init; } = CurrentSchemaVersion;

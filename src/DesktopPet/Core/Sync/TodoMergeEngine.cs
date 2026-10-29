@@ -15,6 +15,7 @@ public static class TodoMergeEngine
                 .Where(operation => operation.Kind is TodoSyncOperationKinds.Add or TodoSyncOperationKinds.SetTitle));
             var state = MaxOperation(group
                 .Where(operation => operation.Kind is TodoSyncOperationKinds.Add or TodoSyncOperationKinds.SetCompleted));
+            var placement = MaxOperation(group.Where(operation => operation.Kind is TodoSyncOperationKinds.Add or TodoSyncOperationKinds.Move));
             var deletion = MaxOperation(group
                 .Where(operation => operation.Kind == TodoSyncOperationKinds.Delete));
 
@@ -24,12 +25,20 @@ public static class TodoMergeEngine
                 state?.IsCompleted ?? false,
                 add.CreatedAtUtc,
                 deletion?.CreatedAtUtc,
-                add.ParentItemId));
+                placement?.ParentItemId,
+                placement?.SortKey ?? TodoOrderKey.Legacy(add.CreatedAtUtc, group.Key)));
         }
+
+        // Resolve against the raw graph, so cycles and excessive depth converge independently of iteration order.
+        var byId = results.ToDictionary(item => item.ItemId);
+        results = results.Select(item => item.ParentItemId is { } parentId &&
+            (parentId == item.ItemId || !byId.TryGetValue(parentId, out var parent) ||
+             parent.DeletedAtUtc is not null || parent.ParentItemId is not null)
+                ? item with { ParentItemId = null } : item).ToList();
 
         return results
             .OrderBy(item => item.IsCompleted)
-            .ThenByDescending(item => item.CreatedAtUtc)
+            .ThenBy(item => item.SortKey, StringComparer.Ordinal)
             .ThenBy(item => item.ItemId)
             .ToArray();
     }
@@ -39,11 +48,14 @@ public static class TodoMergeEngine
         if (operation.OperationId == Guid.Empty || operation.ItemId == Guid.Empty || operation.DeviceId == Guid.Empty || operation.Counter <= 0)
             return false;
 
+        if (operation.ParentItemId == Guid.Empty || (operation.SortKey is not null && !TodoOrderKey.IsValid(operation.SortKey))) return false;
+
         return operation.Kind switch
         {
             TodoSyncOperationKinds.Add => !string.IsNullOrWhiteSpace(operation.Title) &&
                                           operation.IsCompleted is not null &&
                                           operation.ParentItemId != operation.ItemId,
+            TodoSyncOperationKinds.Move => operation.ParentItemId != operation.ItemId && TodoOrderKey.IsValid(operation.SortKey),
             TodoSyncOperationKinds.SetTitle => !string.IsNullOrWhiteSpace(operation.Title) && operation.ParentItemId is null,
             TodoSyncOperationKinds.SetCompleted => operation.IsCompleted is not null && operation.ParentItemId is null,
             TodoSyncOperationKinds.Delete => operation.ParentItemId is null,

@@ -8,7 +8,7 @@ namespace DesktopPet.Data;
 public sealed class DesktopPetRepository(string databasePath)
 {
     private const int MouseGridSchemaVersion = 1;
-    private const int CurrentSchemaVersion = 4;
+    private const int CurrentSchemaVersion = 5;
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
     private readonly string _connectionString = new SqliteConnectionStringBuilder { DataSource = databasePath }.ToString();
@@ -133,20 +133,26 @@ public sealed class DesktopPetRepository(string databasePath)
         lock (_todoGate)
         {
             using var connection = OpenConnection();
-            using var command = connection.CreateCommand();
-            command.CommandText = "SELECT sync_id, title, is_completed, parent_sync_id FROM todos WHERE deleted_at IS NULL ORDER BY is_completed, created_at DESC, id DESC;";
-            using var reader = command.ExecuteReader();
-            var results = new List<TodoItem>();
-            while (reader.Read())
-            {
-                if (!Guid.TryParse(reader.GetString(0), out var id)) continue;
-                Guid? parentId = reader.IsDBNull(3) || !Guid.TryParse(reader.GetString(3), out var parsedParentId)
-                    ? null
-                    : parsedParentId;
-                results.Add(new TodoItem(id, reader.GetString(1), reader.GetBoolean(2), parentId));
-            }
-            return results;
+            return ReadTodos(connection, null);
         }
+    }
+
+    private static IReadOnlyList<TodoItem> ReadTodos(SqliteConnection connection, SqliteTransaction? transaction)
+    {
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = "SELECT sync_id, title, is_completed, parent_sync_id, sort_key FROM todos WHERE deleted_at IS NULL ORDER BY is_completed, sort_key COLLATE BINARY, sync_id;";
+        using var reader = command.ExecuteReader();
+        var results = new List<TodoItem>();
+        while (reader.Read())
+        {
+            if (!Guid.TryParse(reader.GetString(0), out var id)) continue;
+            Guid? parentId = reader.IsDBNull(3) || !Guid.TryParse(reader.GetString(3), out var parsedParentId)
+                ? null
+                : parsedParentId;
+            results.Add(new TodoItem(id, reader.GetString(1), reader.GetBoolean(2), parentId, reader.GetString(4)));
+        }
+        return results;
     }
 
     public TodoItem AddTodo(string title, Guid? parentId = null)
@@ -156,12 +162,15 @@ public sealed class DesktopPetRepository(string databasePath)
 
         var itemId = Guid.NewGuid();
         var createdAt = DateTimeOffset.UtcNow;
+        string sortKey;
         lock (_todoGate)
         {
             using var connection = OpenConnection();
             using var transaction = connection.BeginTransaction();
             var deviceId = GetDeviceId(connection, transaction);
             var counter = NextTodoClock(connection, transaction);
+            var repairedParent = false;
+            sortKey = TodoOrderKey.Between(null, ReadTodos(connection, transaction).Where(item => item.ParentId == parentId && !item.IsCompleted).Select(item => item.SortKey).FirstOrDefault());
 
             if (parentId is not null)
             {
@@ -171,23 +180,69 @@ public sealed class DesktopPetRepository(string databasePath)
                 parentCommand.Parameters.AddWithValue("$id", parentId.Value.ToString("D"));
                 if (Convert.ToInt32(parentCommand.ExecuteScalar()) == 0)
                     throw new InvalidOperationException("只能为仍然存在的顶级待办添加子待办。");
+                repairedParent = EnsureTodoRootPlacement(connection, transaction, ReadTodos(connection, transaction).Single(item => item.Id == parentId));
             }
 
             using var command = connection.CreateCommand();
             command.Transaction = transaction;
-            command.CommandText = "INSERT INTO todos (sync_id, title, is_completed, created_at, deleted_at, parent_sync_id) VALUES ($id, $title, 0, $createdAt, NULL, $parentId);";
+            command.CommandText = "INSERT INTO todos (sync_id, title, is_completed, created_at, deleted_at, parent_sync_id, sort_key) VALUES ($id, $title, 0, $createdAt, NULL, $parentId, $sortKey);";
             command.Parameters.AddWithValue("$id", itemId.ToString("D"));
             command.Parameters.AddWithValue("$title", title);
             command.Parameters.AddWithValue("$createdAt", createdAt.ToString("O"));
+            command.Parameters.AddWithValue("$sortKey", sortKey);
             command.Parameters.AddWithValue("$parentId", parentId is null ? DBNull.Value : parentId.Value.ToString("D"));
             command.ExecuteNonQuery();
-            InsertTodoOperation(connection, transaction, new TodoSyncOperation(Guid.NewGuid(), itemId, deviceId, counter, TodoSyncOperationKinds.Add, title, false, createdAt, parentId));
+            InsertTodoOperation(connection, transaction, new TodoSyncOperation(Guid.NewGuid(), itemId, deviceId, counter, TodoSyncOperationKinds.Add, title, false, createdAt, parentId, sortKey));
+            if (repairedParent) RebuildTodosFromOperations(connection, transaction);
             transaction.Commit();
         }
 
-        var item = new TodoItem(itemId, title, false, parentId);
+        var item = new TodoItem(itemId, title, false, parentId, sortKey);
         TodosChanged?.Invoke(this, EventArgs.Empty);
         return item;
+    }
+
+    // The anchor is interpreted using current repository state, never a stale UI index.
+    public bool MoveTodo(Guid id, Guid? parentId, Guid? anchorId, bool after)
+    {
+        lock (_todoGate)
+        {
+            using var connection = OpenConnection();
+            using var transaction = connection.BeginTransaction();
+            var items = ReadTodos(connection, transaction);
+            var source = items.FirstOrDefault(item => item.Id == id);
+            if (source is null || parentId == id) return false;
+            if (parentId is { } targetParent &&
+                (!items.Any(item => item.Id == targetParent && item.ParentId is null) ||
+                 items.Any(item => item.ParentId == id))) return false;
+            var siblings = items.Where(item => item.Id != id && item.ParentId == parentId &&
+                item.IsCompleted == source.IsCompleted).ToList();
+            var index = siblings.Count;
+            if (anchorId is { } anchor)
+            {
+                var target = items.FirstOrDefault(item => item.Id == anchor);
+                if (target is null || target.ParentId != parentId || anchor == id) return false;
+                // Completion groups always take priority over pointer position.
+                index = target.IsCompleted != source.IsCompleted
+                    ? (source.IsCompleted ? 0 : siblings.Count)
+                    : siblings.FindIndex(item => item.Id == anchor) + (after ? 1 : 0);
+            }
+            var original = items.Where(item => item.ParentId == parentId &&
+                item.IsCompleted == source.IsCompleted).ToList();
+            if (source.ParentId == parentId && original.FindIndex(item => item.Id == id) == index) return false;
+            if (parentId is { } rootId)
+                EnsureTodoRootPlacement(connection, transaction, items.Single(item => item.Id == rootId));
+            var lower = index > 0 ? siblings[index - 1].SortKey : null;
+            var upper = index < siblings.Count ? siblings[index].SortKey : null;
+            var sortKey = TodoOrderKey.Between(lower, upper);
+            InsertTodoOperation(connection, transaction, new TodoSyncOperation(
+                Guid.NewGuid(), id, GetDeviceId(connection, transaction), NextTodoClock(connection, transaction),
+                TodoSyncOperationKinds.Move, null, null, DateTimeOffset.UtcNow, parentId, sortKey));
+            RebuildTodosFromOperations(connection, transaction);
+            transaction.Commit();
+        }
+        TodosChanged?.Invoke(this, EventArgs.Empty);
+        return true;
     }
 
     public void SetTodoCompleted(Guid id, bool isCompleted)
@@ -305,6 +360,7 @@ public sealed class DesktopPetRepository(string databasePath)
                     Guid.NewGuid(), itemId, deviceId, NextTodoClock(connection, transaction),
                     TodoSyncOperationKinds.Delete, null, null, deletedAt));
             }
+            if (changed) RebuildTodosFromOperations(connection, transaction);
             transaction.Commit();
         }
         if (changed) TodosChanged?.Invoke(this, EventArgs.Empty);
@@ -317,7 +373,7 @@ public sealed class DesktopPetRepository(string databasePath)
             using var connection = OpenConnection();
             using var command = connection.CreateCommand();
             command.CommandText = """
-                SELECT operation_id, item_sync_id, device_id, counter, kind, title, is_completed, created_at, parent_item_sync_id
+                SELECT operation_id, item_sync_id, device_id, counter, kind, title, is_completed, created_at, parent_item_sync_id, sort_key
                 FROM todo_sync_operations
                 ORDER BY counter, device_id, operation_id;
                 """;
@@ -339,7 +395,8 @@ public sealed class DesktopPetRepository(string databasePath)
                     reader.IsDBNull(5) ? null : reader.GetString(5),
                     reader.IsDBNull(6) ? null : reader.GetBoolean(6),
                     createdAt,
-                    reader.IsDBNull(8) || !Guid.TryParse(reader.GetString(8), out var parentItemId) ? null : parentItemId));
+                    reader.IsDBNull(8) || !Guid.TryParse(reader.GetString(8), out var parentItemId) ? null : parentItemId,
+                    reader.IsDBNull(9) ? null : reader.GetString(9)));
             }
             return operations;
         }
@@ -866,6 +923,8 @@ public void RenameLauncher(long id, string name)
         EnsureColumn(connection, "todos", "deleted_at", "TEXT NULL");
         EnsureColumn(connection, "todos", "parent_sync_id", "TEXT NULL");
         EnsureColumn(connection, "todo_sync_operations", "parent_item_sync_id", "TEXT NULL");
+        EnsureColumn(connection, "todos", "sort_key", "TEXT NULL");
+        EnsureColumn(connection, "todo_sync_operations", "sort_key", "TEXT NULL");
 
         using var transaction = connection.BeginTransaction();
         var deviceId = GetDeviceId(connection, transaction);
@@ -912,6 +971,7 @@ public void RenameLauncher(long id, string name)
             var version = Convert.ToInt32(versionCommand.ExecuteScalar());
             if (version < CurrentSchemaVersion)
             {
+                RebuildTodosFromOperations(connection, transaction);
                 versionCommand.CommandText = $"PRAGMA user_version = {CurrentSchemaVersion};";
                 versionCommand.ExecuteNonQuery();
             }
@@ -1130,14 +1190,33 @@ public void RenameLauncher(long id, string name)
         command.ExecuteNonQuery();
     }
 
+    // An orphan/cycle may be displayed as a root while its winning log entry still has a parent.
+    // Before attaching children, make that effective root relationship explicit in the log.
+    private static bool EnsureTodoRootPlacement(SqliteConnection connection, SqliteTransaction transaction, TodoItem parent)
+    {
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            SELECT parent_item_sync_id FROM todo_sync_operations
+            WHERE item_sync_id = $id AND kind IN ('add', 'move')
+            ORDER BY counter DESC, device_id DESC, operation_id DESC LIMIT 1;
+            """;
+        command.Parameters.AddWithValue("$id", parent.Id.ToString("D"));
+        if (command.ExecuteScalar() is not string) return false;
+        InsertTodoOperation(connection, transaction, new TodoSyncOperation(
+            Guid.NewGuid(), parent.Id, GetDeviceId(connection, transaction), NextTodoClock(connection, transaction),
+            TodoSyncOperationKinds.Move, null, null, DateTimeOffset.UtcNow, null, parent.SortKey));
+        return true;
+    }
+
     private static int InsertTodoOperation(SqliteConnection connection, SqliteTransaction transaction, TodoSyncOperation operation, bool ignoreExisting = false)
     {
         using var command = connection.CreateCommand();
         command.Transaction = transaction;
         command.CommandText = $"""
             INSERT {(ignoreExisting ? "OR IGNORE " : string.Empty)}INTO todo_sync_operations
-              (operation_id, item_sync_id, device_id, counter, kind, title, is_completed, created_at, parent_item_sync_id)
-            VALUES ($operationId, $itemId, $deviceId, $counter, $kind, $title, $completed, $createdAt, $parentItemId);
+              (operation_id, item_sync_id, device_id, counter, kind, title, is_completed, created_at, parent_item_sync_id, sort_key)
+            VALUES ($operationId, $itemId, $deviceId, $counter, $kind, $title, $completed, $createdAt, $parentItemId, $sortKey);
             """;
         command.Parameters.AddWithValue("$operationId", operation.OperationId.ToString("D"));
         command.Parameters.AddWithValue("$itemId", operation.ItemId.ToString("D"));
@@ -1148,6 +1227,7 @@ public void RenameLauncher(long id, string name)
         command.Parameters.AddWithValue("$completed", operation.IsCompleted is null ? DBNull.Value : operation.IsCompleted.Value);
         command.Parameters.AddWithValue("$createdAt", operation.CreatedAtUtc.ToString("O"));
         command.Parameters.AddWithValue("$parentItemId", operation.ParentItemId is null ? DBNull.Value : operation.ParentItemId.Value.ToString("D"));
+        command.Parameters.AddWithValue("$sortKey", (object?)operation.SortKey ?? DBNull.Value);
         return command.ExecuteNonQuery();
     }
 
@@ -1157,7 +1237,7 @@ public void RenameLauncher(long id, string name)
         using (var readCommand = connection.CreateCommand())
         {
             readCommand.Transaction = transaction;
-            readCommand.CommandText = "SELECT operation_id, item_sync_id, device_id, counter, kind, title, is_completed, created_at, parent_item_sync_id FROM todo_sync_operations;";
+            readCommand.CommandText = "SELECT operation_id, item_sync_id, device_id, counter, kind, title, is_completed, created_at, parent_item_sync_id, sort_key FROM todo_sync_operations;";
             using var reader = readCommand.ExecuteReader();
             while (reader.Read())
             {
@@ -1168,7 +1248,8 @@ public void RenameLauncher(long id, string name)
                     continue;
                 operations.Add(new TodoSyncOperation(operationId, itemId, deviceId, reader.GetInt64(3), reader.GetString(4),
                     reader.IsDBNull(5) ? null : reader.GetString(5), reader.IsDBNull(6) ? null : reader.GetBoolean(6), createdAt,
-                    reader.IsDBNull(8) || !Guid.TryParse(reader.GetString(8), out var parentItemId) ? null : parentItemId));
+                    reader.IsDBNull(8) || !Guid.TryParse(reader.GetString(8), out var parentItemId) ? null : parentItemId,
+                    reader.IsDBNull(9) ? null : reader.GetString(9)));
             }
         }
 
@@ -1181,15 +1262,17 @@ public void RenameLauncher(long id, string name)
 
         using var insertCommand = connection.CreateCommand();
         insertCommand.Transaction = transaction;
-        insertCommand.CommandText = "INSERT INTO todos (sync_id, title, is_completed, created_at, deleted_at, parent_sync_id) VALUES ($id, $title, $completed, $createdAt, $deletedAt, $parentId);";
+        insertCommand.CommandText = "INSERT INTO todos (sync_id, title, is_completed, created_at, deleted_at, parent_sync_id, sort_key) VALUES ($id, $title, $completed, $createdAt, $deletedAt, $parentId, $sortKey);";
         var idParameter = insertCommand.Parameters.Add("$id", SqliteType.Text);
         var titleParameter = insertCommand.Parameters.Add("$title", SqliteType.Text);
         var completedParameter = insertCommand.Parameters.Add("$completed", SqliteType.Integer);
         var createdAtParameter = insertCommand.Parameters.Add("$createdAt", SqliteType.Text);
         var deletedAtParameter = insertCommand.Parameters.Add("$deletedAt", SqliteType.Text);
         var parentIdParameter = insertCommand.Parameters.Add("$parentId", SqliteType.Text);
+        var sortKeyParameter = insertCommand.Parameters.Add("$sortKey", SqliteType.Text);
         foreach (var item in TodoMergeEngine.Materialize(operations))
         {
+            sortKeyParameter.Value = item.SortKey;
             idParameter.Value = item.ItemId.ToString("D");
             titleParameter.Value = item.Title;
             completedParameter.Value = item.IsCompleted;
@@ -1217,7 +1300,7 @@ public void RenameLauncher(long id, string name)
     }
 }
 
-public sealed record TodoItem(Guid Id, string Title, bool IsCompleted, Guid? ParentId);
+public sealed record TodoItem(Guid Id, string Title, bool IsCompleted, Guid? ParentId, string SortKey = "5");
 public sealed record ClipboardItem(long Id, string Content);
 public sealed record NoteItem(
     Guid Id,
