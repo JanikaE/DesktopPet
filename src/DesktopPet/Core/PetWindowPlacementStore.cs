@@ -4,12 +4,22 @@ namespace DesktopPet.Core;
 
 public sealed class PetWindowPlacementStore(string path)
 {
+    private readonly object _gate = new();
+
     public PetWindowSettings? Load()
+    {
+        lock (_gate)
+        {
+            return Read(path) ?? Read(path + ".bak");
+        }
+    }
+
+    private static PetWindowSettings? Read(string filePath)
     {
         try
         {
-            if (!File.Exists(path)) return null;
-            var settings = JsonSerializer.Deserialize<PetWindowSettingsDto>(File.ReadAllText(path));
+            if (!File.Exists(filePath)) return null;
+            var settings = JsonSerializer.Deserialize<PetWindowSettingsDto>(File.ReadAllText(filePath));
             return settings is null ? null : new PetWindowSettings(
                 settings.Left,
                 settings.Top,
@@ -38,9 +48,38 @@ public sealed class PetWindowPlacementStore(string path)
         HotkeyGesture? mouseStatisticsHotkey,
         bool[]? mouseLegendHidden,
         string keyboardLayoutId,
-        string selectedPetId) => File.WriteAllText(
-        path,
-        JsonSerializer.Serialize(new PetWindowSettings(left, top, width, topmost, hotkey, keyboardStatisticsHotkey, mouseStatisticsHotkey, mouseLegendHidden, keyboardLayoutId, selectedPetId)));
+        string selectedPetId)
+    {
+        // Serialize before touching disk so serialization failures cannot truncate settings.
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(new PetWindowSettings(left, top, width, topmost, hotkey, keyboardStatisticsHotkey, mouseStatisticsHotkey, mouseLegendHidden, keyboardLayoutId, selectedPetId));
+        lock (_gate)
+        {
+            var temporaryPath = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+            try
+            {
+                using (var stream = new FileStream(temporaryPath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+                {
+                    stream.Write(bytes);
+                    stream.Flush(flushToDisk: true);
+                }
+
+                if (File.Exists(path))
+                {
+                    // Never replace a good recovery copy with a corrupt primary file.
+                    var backupPath = Read(path) is null ? null : path + ".bak";
+                    File.Replace(temporaryPath, path, backupPath);
+                }
+                else
+                {
+                    File.Move(temporaryPath, path);
+                }
+            }
+            finally
+            {
+                if (File.Exists(temporaryPath)) File.Delete(temporaryPath);
+            }
+        }
+    }
 }
 
 public sealed record PetWindowSettings(
